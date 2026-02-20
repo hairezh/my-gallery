@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Galeria (Offline no Navegador)</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>Minha Galeria</h1>
+      <p>Arquivos salvos no seu navegador (IndexedDB)</p>
+    </div>
+
+    <div class="controls">
+      <input id="search" placeholder="Buscar por nome..." />
+      <select id="folderSelect"></select>
+      <select id="typeSelect">
+        <option value="all">Tudo</option>
+        <option value="image">Imagens</option>
+        <option value="video">Vídeos</option>
+      </select>
+      <button id="refresh">Atualizar</button>
+    </div>
+  </header>
+
+  <section class="uploader">
+    <input id="folderInput" placeholder="Pasta (ex: Anime, Wallpapers...)" />
+    <input id="fileInput" type="file" multiple accept="image/*,video/*" />
+    <button id="addBtn">Adicionar</button>
+    <span id="status"></span>
+  </section>
+
+  <section class="backup">
+    <button id="exportBtn">Exportar backup (.json)</button>
+    <input id="importInput" type="file" accept="application/json" />
+    <button id="clearBtn" class="danger">Apagar tudo (deste navegador)</button>
+  </section>
+
+  <main id="grid" class="grid"></main>
+
+  <template id="cardTpl">
+    <article class="card">
+      <div class="preview"></div>
+      <div class="meta">
+        <div class="name"></div>
+        <div class="sub"></div>
+      </div>
+      <div class="actions">
+        <button class="open">Abrir</button>
+        <button class="del danger">Excluir</button>
+      </div>
+    </article>
+  </template>
+
+  <dialog id="viewer">
+    <div class="viewerTop">
+      <div id="viewerTitle"></div>
+      <button id="closeViewer">Fechar</button>
+    </div>
+    <div id="viewerBody" class="viewerBody"></div>
+  </dialog>
+
+  <script src="./app.js"></script>
+</body>
+</html>

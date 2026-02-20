@@ -1,522 +1,862 @@
-(() => {
-  // ===== IndexedDB =====
-  const DB_NAME = "galeriaDB";
-  const DB_VERSION = 1;
-  const STORE = "items";
+/* Galeria local (IndexedDB) — imagens e vídeos
+   - Pastas com nome e data editáveis
+   - Upload local (blobs no IndexedDB)
+   - Busca por pasta + arquivo (nome)
+*/
 
-  let db = null;
+const $ = (sel) => document.querySelector(sel);
 
-  const $ = (q) => document.querySelector(q);
+const els = {
+  grid: $("#grid"),
+  crumbs: $("#crumbs"),
+  empty: $("#empty"),
 
-  // UI
-  const searchInput = $("#searchInput");
-  const folderFilter = $("#folderFilter");
-  const typeFilter = $("#typeFilter");
-  const sortBy = $("#sortBy");
+  btnAddMedia: $("#btnAddMedia"),
+  btnAddFolder: $("#btnAddFolder"),
+  btnSearch: $("#btnSearch"),
 
-  const folderInput = $("#folderInput");
-  const fileInput = $("#fileInput");
-  const pickBtn = $("#pickBtn");
-  const addBtn = $("#addBtn");
-  const statusEl = $("#status");
-  const dropzone = $("#dropzone");
+  filePicker: $("#filePicker"),
 
-  const exportBtn = $("#exportBtn");
-  const importInput = $("#importInput");
-  const clearBtn = $("#clearBtn");
+  searchbar: $("#searchbar"),
+  searchInput: $("#searchInput"),
 
-  const grid = $("#grid");
-  const tpl = $("#cardTpl");
+  folderModal: $("#folderModal"),
+  folderForm: $("#folderForm"),
+  folderModalTitle: $("#folderModalTitle"),
+  folderName: $("#folderName"),
+  folderDate: $("#folderDate"),
+  folderCancel: $("#folderCancel"),
 
-  const countLabel = $("#countLabel");
-  const quotaLabel = $("#quotaLabel");
+  viewerModal: $("#viewerModal"),
+  viewerBody: $("#viewerBody"),
+  viewerName: $("#viewerName"),
+  viewerSub: $("#viewerSub"),
+  viewerClose: $("#viewerClose"),
+  viewerDelete: $("#viewerDelete"),
+  viewerRename: $("#viewerRename"),
+  viewerMove: $("#viewerMove"),
+  viewerApply: $("#viewerApply"),
 
-  // Modal
-  const modal = $("#modal");
-  const modalBackdrop = $("#modalBackdrop");
-  const viewerName = $("#viewerName");
-  const viewerInfo = $("#viewerInfo");
-  const viewerBody = $("#viewerBody");
-  const renameBtn = $("#renameBtn");
-  const moveBtn = $("#moveBtn");
-  const downloadBtn = $("#downloadBtn");
-  const deleteBtn = $("#deleteBtn");
-  const closeBtn = $("#closeBtn");
+  toast: $("#toast"),
+};
 
-  // State
-  let itemsCache = [];
-  let currentId = null;
-  const urlCache = new Map(); // id -> objectURL
+const state = {
+  currentFolderId: null,     // null = raiz
+  searchOpen: false,
+  searchQuery: "",
 
-  // ===== Helpers =====
-  function setStatus(msg) { statusEl.textContent = msg || ""; }
+  folders: [],
+  media: [],                 // metadados
+  openMenuEl: null,
 
-  function uid() { return `${Date.now()}_${Math.random().toString(16).slice(2)}`; }
+  editingFolderId: null,
+  viewingMediaId: null,
+};
 
-  function guessType(mime) {
-    if (!mime) return "other";
-    if (mime.startsWith("image/")) return "image";
-    if (mime.startsWith("video/")) return "video";
-    return "other";
-  }
+function uid(){
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  return "id-" + Math.random().toString(16).slice(2) + "-" + Date.now();
+}
 
-  function humanBytes(bytes) {
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let i = 0, b = bytes || 0;
-    while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
-    return `${b.toFixed(b >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
-  }
+function todayISO(){
+  const d = new Date();
+  const tz = d.getTimezoneOffset() * 60000;
+  return new Date(d - tz).toISOString().slice(0,10);
+}
 
-  function fmtDate(iso) {
-    try { return new Date(iso).toLocaleString(); } catch { return iso || ""; }
-  }
+function fmtDate(iso){
+  // iso: YYYY-MM-DD
+  if (!iso) return "—";
+  const [y,m,dd] = iso.split("-").map(Number);
+  const d = new Date(y, m-1, dd);
+  return d.toLocaleDateString("pt-BR", { year:"numeric", month:"2-digit", day:"2-digit" });
+}
 
-  function openModal() { modal.classList.remove("hidden"); }
-  function closeModal() { modal.classList.add("hidden"); }
+function fmtBytes(n){
+  if (n === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B","KB","MB","GB","TB"];
+  const i = Math.floor(Math.log(n)/Math.log(k));
+  return (n/Math.pow(k,i)).toFixed(i ? 1 : 0) + " " + sizes[i];
+}
 
-  function objectURLFor(item) {
-    if (urlCache.has(item.id)) return urlCache.get(item.id);
-    const blob = item.data instanceof Blob ? item.data : new Blob([item.data], { type: item.mime });
-    const url = URL.createObjectURL(blob);
-    urlCache.set(item.id, url);
-    return url;
-  }
+function toast(msg){
+  els.toast.textContent = msg;
+  els.toast.hidden = false;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => (els.toast.hidden = true), 2200);
+}
 
-  function revokeURL(id) {
-    const u = urlCache.get(id);
-    if (u) URL.revokeObjectURL(u);
-    urlCache.delete(id);
-  }
+/* ---------------- IndexedDB ---------------- */
 
-  // ===== DB =====
-  function openDB() {
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = () => {
-        const d = req.result;
-        if (!d.objectStoreNames.contains(STORE)) {
-          const st = d.createObjectStore(STORE, { keyPath: "id" });
-          st.createIndex("folder", "folder", { unique: false });
-          st.createIndex("name", "name", { unique: false });
-          st.createIndex("type", "type", { unique: false });
-          st.createIndex("createdAt", "createdAt", { unique: false });
-        }
+const DB_NAME = "galeria-minimal";
+const DB_VER = 1;
+
+function idbOpen(){
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VER);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+
+      const folders = db.createObjectStore("folders", { keyPath: "id" });
+      folders.createIndex("nameLower", "nameLower", { unique: false });
+      folders.createIndex("createdISO", "createdISO", { unique: false });
+
+      const media = db.createObjectStore("media", { keyPath: "id" });
+      media.createIndex("folderId", "folderId", { unique: false });
+      media.createIndex("nameLower", "nameLower", { unique: false });
+      media.createIndex("createdAt", "createdAt", { unique: false });
+
+      // blobs: original + thumb
+      db.createObjectStore("blobs", { keyPath: "id" });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function tx(storeNames, mode, fn){
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(storeNames, mode);
+    const stores = storeNames.map((n) => t.objectStore(n));
+    let out;
+    Promise.resolve(fn(...stores))
+      .then((r) => { out = r; })
+      .catch(reject);
+    t.oncomplete = () => resolve(out);
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error);
+  });
+}
+
+async function dbGetAllFolders(){
+  return tx(["folders"], "readonly", (folders) =>
+    new Promise((res, rej) => {
+      const req = folders.getAll();
+      req.onsuccess = () => res(req.result || []);
+      req.onerror = () => rej(req.error);
+    })
+  );
+}
+
+async function dbGetAllMediaMeta(){
+  return tx(["media"], "readonly", (media) =>
+    new Promise((res, rej) => {
+      const req = media.getAll();
+      req.onsuccess = () => res(req.result || []);
+      req.onerror = () => rej(req.error);
+    })
+  );
+}
+
+async function dbPutFolder(folder){
+  return tx(["folders"], "readwrite", (folders) => folders.put(folder));
+}
+
+async function dbDeleteFolder(folderId){
+  // apaga pasta + move media pra raiz? aqui: apaga pasta e TAMBÉM apaga mídia dela (mais “limpo”).
+  return tx(["folders","media","blobs"], "readwrite", async (folders, media, blobs) => {
+    // buscar mídias da pasta
+    const mids = await new Promise((res, rej) => {
+      const idx = media.index("folderId");
+      const req = idx.getAll(folderId);
+      req.onsuccess = () => res((req.result || []).map(x => x.id));
+      req.onerror = () => rej(req.error);
+    });
+
+    for (const id of mids){
+      media.delete(id);
+      blobs.delete(id);
+    }
+    folders.delete(folderId);
+  });
+}
+
+async function dbPutMedia(meta, blob, thumb){
+  return tx(["media","blobs"], "readwrite", (media, blobs) => {
+    media.put(meta);
+    blobs.put({ id: meta.id, blob, thumb });
+  });
+}
+
+async function dbGetBlobs(mediaId){
+  return tx(["blobs"], "readonly", (blobs) =>
+    new Promise((res, rej) => {
+      const req = blobs.get(mediaId);
+      req.onsuccess = () => res(req.result || null);
+      req.onerror = () => rej(req.error);
+    })
+  );
+}
+
+async function dbDeleteMedia(mediaId){
+  return tx(["media","blobs"], "readwrite", (media, blobs) => {
+    media.delete(mediaId);
+    blobs.delete(mediaId);
+  });
+}
+
+async function dbUpdateMediaMeta(mediaId, patch){
+  return tx(["media"], "readwrite", (media) =>
+    new Promise((res, rej) => {
+      const g = media.get(mediaId);
+      g.onsuccess = () => {
+        const cur = g.result;
+        if (!cur) return res(null);
+        const next = { ...cur, ...patch };
+        next.nameLower = (next.name || "").toLowerCase();
+        const p = media.put(next);
+        p.onsuccess = () => res(next);
+        p.onerror = () => rej(p.error);
       };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  }
+      g.onerror = () => rej(g.error);
+    })
+  );
+}
 
-  function store(mode = "readonly") {
-    return db.transaction(STORE, mode).objectStore(STORE);
-  }
+/* ---------------- Thumbs ---------------- */
 
-  function getAll() {
-    return new Promise((resolve, reject) => {
-      const req = store("readonly").getAll();
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  function put(item) {
-    return new Promise((resolve, reject) => {
-      const req = store("readwrite").put(item);
-      req.onsuccess = () => resolve(true);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  function get(id) {
-    return new Promise((resolve, reject) => {
-      const req = store("readonly").get(id);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  function del(id) {
-    return new Promise((resolve, reject) => {
-      const req = store("readwrite").delete(id);
-      req.onsuccess = () => resolve(true);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  function clearDB() {
-    return new Promise((resolve, reject) => {
-      const req = store("readwrite").clear();
-      req.onsuccess = () => resolve(true);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  // ===== Rendering =====
-  function refreshFolderOptions(items) {
-    const counts = new Map();
-    for (const it of items) {
-      const f = it.folder || "Sem pasta";
-      counts.set(f, (counts.get(f) || 0) + 1);
-    }
-
-    const current = folderFilter.value || "__ALL__";
-    folderFilter.innerHTML = `<option value="__ALL__">Todas as pastas</option>`;
-
-    [...counts.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .forEach(([name, count]) => {
-        const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = `${name} (${count})`;
-        folderFilter.appendChild(opt);
-      });
-
-    const exists = [...folderFilter.options].some(o => o.value === current);
-    folderFilter.value = exists ? current : "__ALL__";
-  }
-
-  function filteredAndSorted(items) {
-    const q = searchInput.value.trim().toLowerCase();
-    const folder = folderFilter.value;
-    const type = typeFilter.value;
-
-    let list = items.filter(it => {
-      if (folder !== "__ALL__" && (it.folder || "Sem pasta") !== folder) return false;
-      if (type !== "all" && it.type !== type) return false;
-      if (q && !(it.name || "").toLowerCase().includes(q)) return false;
-      return true;
+async function imgToThumbBlob(fileBlob){
+  // reduz para ~360px largura (qualidade ok) pra ficar leve
+  const img = new Image();
+  const url = URL.createObjectURL(fileBlob);
+  try{
+    await new Promise((res, rej) => {
+      img.onload = () => res();
+      img.onerror = rej;
+      img.src = url;
     });
 
-    const mode = sortBy.value;
-    const coll = new Intl.Collator("pt-BR", { sensitivity: "base", numeric: true });
+    const maxW = 420;
+    const ratio = img.width / img.height || 1;
+    const w = Math.min(maxW, img.width);
+    const h = Math.round(w / ratio);
 
-    if (mode === "new") list.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-    if (mode === "name") list.sort((a, b) => coll.compare(a.name || "", b.name || ""));
-    if (mode === "size") list.sort((a, b) => (b.size || 0) - (a.size || 0));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, w, h);
 
-    return list;
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.78));
+    return blob || fileBlob;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function videoToThumbBlob(fileBlob){
+  const url = URL.createObjectURL(fileBlob);
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "metadata";
+  video.src = url;
+
+  try{
+    await new Promise((res, rej) => {
+      video.onloadedmetadata = () => res();
+      video.onerror = rej;
+    });
+
+    // tenta ir um tiquinho pra frente pra evitar frame preto
+    const t = Math.min(0.25, (video.duration || 1) / 4);
+    await new Promise((res) => {
+      const handler = () => {
+        video.removeEventListener("seeked", handler);
+        res();
+      };
+      video.addEventListener("seeked", handler);
+      video.currentTime = t;
+    });
+
+    const w = 420;
+    const ratio = (video.videoWidth || 16) / (video.videoHeight || 10);
+    const h = Math.round(w / ratio);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, w, h);
+
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+    return blob;
+  } catch {
+    // fallback: thumb null
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/* ---------------- UI / Render ---------------- */
+
+function closeMenu(){
+  if (state.openMenuEl){
+    state.openMenuEl.remove();
+    state.openMenuEl = null;
+    document.removeEventListener("click", closeMenu, true);
+  }
+}
+
+function openMenuAt(x, y, items){
+  closeMenu();
+  const menu = document.createElement("div");
+  menu.className = "menu";
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+
+  for (const it of items){
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = it.label;
+    if (it.danger) b.classList.add("danger");
+    b.addEventListener("click", () => { closeMenu(); it.onClick(); });
+    menu.appendChild(b);
   }
 
-  function render() {
-    const list = filteredAndSorted(itemsCache);
-    countLabel.textContent = `${list.length} visível(is) • ${itemsCache.length} total`;
+  document.body.appendChild(menu);
+  state.openMenuEl = menu;
 
-    grid.innerHTML = "";
-    if (list.length === 0) {
-      const div = document.createElement("div");
-      div.className = "muted";
-      div.textContent = "Nada encontrado. Tente outra busca ou adicione arquivos.";
-      grid.appendChild(div);
-      return;
-    }
+  // evita sair da tela
+  const r = menu.getBoundingClientRect();
+  const pad = 8;
+  let nx = x, ny = y;
+  if (r.right > innerWidth - pad) nx = Math.max(pad, innerWidth - r.width - pad);
+  if (r.bottom > innerHeight - pad) ny = Math.max(pad, innerHeight - r.height - pad);
+  menu.style.left = `${nx}px`;
+  menu.style.top = `${ny}px`;
 
-    for (const it of list) {
-      const node = tpl.content.cloneNode(true);
-      const card = node.querySelector(".card");
-      const thumb = node.querySelector(".thumb");
-      const name = node.querySelector(".name");
-      const folder = node.querySelector(".folder");
-      const size = node.querySelector(".size");
+  setTimeout(() => document.addEventListener("click", closeMenu, true), 0);
+}
 
-      name.textContent = it.name || "(sem nome)";
-      folder.textContent = it.folder || "Sem pasta";
-      size.textContent = humanBytes(it.size || 0);
+function setCrumbs(){
+  const root = document.createElement("div");
+  const wrap = document.createElement("div");
+  wrap.style.display = "flex";
+  wrap.style.alignItems = "center";
+  wrap.style.gap = "10px";
 
-      thumb.innerHTML = "";
-      if (it.type === "image") {
-        const img = document.createElement("img");
-        img.loading = "lazy";
-        img.alt = it.name || "";
-        img.src = objectURLFor(it);
-        thumb.appendChild(img);
-      } else if (it.type === "video") {
-        const b = document.createElement("div");
-        b.className = "badge";
-        b.textContent = "VÍDEO";
-        thumb.appendChild(b);
-      } else {
-        const b = document.createElement("div");
-        b.className = "badge";
-        b.textContent = "ARQUIVO";
-        thumb.appendChild(b);
-      }
-
-      card.addEventListener("click", () => openViewer(it.id));
-      card.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openViewer(it.id); }
-      });
-
-      grid.appendChild(node);
-    }
-  }
-
-  async function reload() {
-    // limpa URLs antigas pra não vazar memória
-    for (const it of itemsCache) revokeURL(it.id);
-
-    itemsCache = await getAll();
-    refreshFolderOptions(itemsCache);
+  const aRoot = document.createElement("a");
+  aRoot.href = "#";
+  aRoot.textContent = "Raiz";
+  aRoot.onclick = (e) => {
+    e.preventDefault();
+    state.currentFolderId = null;
+    state.searchQuery = "";
     render();
-    updateQuota();
+  };
+
+  wrap.appendChild(aRoot);
+
+  if (state.currentFolderId){
+    const folder = state.folders.find(f => f.id === state.currentFolderId);
+    const sep = document.createElement("span");
+    sep.textContent = "›";
+    const name = document.createElement("span");
+    name.textContent = folder?.name || "Pasta";
+    wrap.appendChild(sep);
+    wrap.appendChild(name);
   }
 
-  async function updateQuota() {
-    if (!navigator.storage?.estimate) { quotaLabel.textContent = ""; return; }
-    try {
-      const est = await navigator.storage.estimate();
-      quotaLabel.textContent = `Uso: ${humanBytes(est.usage || 0)} / ${humanBytes(est.quota || 0)}`;
-    } catch {
-      quotaLabel.textContent = "";
+  els.crumbs.innerHTML = "";
+  els.crumbs.appendChild(wrap);
+}
+
+function isEmptyView(){
+  const hasFolders = state.folders.length > 0;
+  const hasMedia = state.media.length > 0;
+  return !hasFolders && !hasMedia;
+}
+
+async function render(){
+  setCrumbs();
+  els.grid.innerHTML = "";
+  els.empty.hidden = !isEmptyView();
+
+  const q = state.searchQuery.trim().toLowerCase();
+
+  // VIEW: busca
+  if (q){
+    const folderHits = state.folders.filter(f =>
+      f.nameLower.includes(q) || (f.createdISO || "").includes(q)
+    );
+
+    const mediaHits = state.media.filter(m =>
+      (m.nameLower || "").includes(q) ||
+      (m.type || "").includes(q) ||
+      (m.mime || "").includes(q)
+    );
+
+    // pastas primeiro
+    for (const f of folderHits){
+      els.grid.appendChild(folderCard(f, { highlight: q }));
+    }
+    for (const m of mediaHits){
+      els.grid.appendChild(await mediaCard(m, { highlight: q }));
+    }
+
+    if (!folderHits.length && !mediaHits.length){
+      const ghost = document.createElement("div");
+      ghost.className = "emptyCard";
+      ghost.innerHTML = `<div class="emptyTitle">Sem resultados</div>
+        <div class="emptyText">Tente outra palavra (pasta, nome de arquivo, “video”, “image”, etc.).</div>`;
+      els.grid.appendChild(ghost);
+    }
+    return;
+  }
+
+  // VIEW: raiz
+  if (!state.currentFolderId){
+    // pastas
+    const folders = [...state.folders].sort((a,b) => (b.createdISO||"").localeCompare(a.createdISO||""));
+    for (const f of folders){
+      els.grid.appendChild(folderCard(f));
+    }
+
+    // mídia solta (folderId null)
+    const loose = state.media.filter(m => !m.folderId)
+      .sort((a,b) => (b.createdAt||0) - (a.createdAt||0));
+    for (const m of loose){
+      els.grid.appendChild(await mediaCard(m));
+    }
+    return;
+  }
+
+  // VIEW: dentro da pasta
+  const inside = state.media
+    .filter(m => m.folderId === state.currentFolderId)
+    .sort((a,b) => (b.createdAt||0) - (a.createdAt||0));
+
+  for (const m of inside){
+    els.grid.appendChild(await mediaCard(m));
+  }
+}
+
+function folderCard(folder, opts = {}){
+  const card = document.createElement("article");
+  card.className = "card";
+  card.tabIndex = 0;
+
+  const head = document.createElement("div");
+  head.className = "cardHead";
+
+  const title = document.createElement("div");
+  title.className = "cardTitle";
+  title.textContent = folder.name;
+
+  const kebab = document.createElement("button");
+  kebab.className = "kebab";
+  kebab.type = "button";
+  kebab.textContent = "⋯";
+  kebab.title = "Opções";
+
+  kebab.onclick = (e) => {
+    e.stopPropagation();
+    const r = kebab.getBoundingClientRect();
+    openMenuAt(r.left, r.bottom + 6, [
+      { label: "Editar pasta", onClick: () => openFolderModal(folder.id) },
+      { label: "Excluir pasta", danger: true, onClick: async () => {
+          const ok = confirm("Excluir esta pasta e todos os arquivos dentro dela?");
+          if (!ok) return;
+          await dbDeleteFolder(folder.id);
+          await refreshFromDB();
+          if (state.currentFolderId === folder.id) state.currentFolderId = null;
+          toast("Pasta excluída.");
+          render();
+        }
+      },
+    ]);
+  };
+
+  head.appendChild(title);
+  head.appendChild(kebab);
+
+  const sub = document.createElement("div");
+  sub.className = "cardSub";
+  sub.textContent = `Criada em ${fmtDate(folder.createdISO)}`;
+
+  const thumb = document.createElement("div");
+  thumb.className = "thumb";
+  const badge = document.createElement("div");
+  badge.className = "badge";
+  badge.textContent = "Pasta";
+  thumb.appendChild(badge);
+
+  card.appendChild(head);
+  card.appendChild(sub);
+  card.appendChild(thumb);
+
+  card.onclick = () => {
+    state.currentFolderId = folder.id;
+    render();
+  };
+
+  // duplo clique = editar (sem botão extra)
+  card.ondblclick = (e) => {
+    e.preventDefault();
+    openFolderModal(folder.id);
+  };
+
+  // highlight simples (busca)
+  if (opts.highlight){
+    const q = opts.highlight;
+    if (folder.nameLower.includes(q)){
+      card.style.outline = "2px solid rgba(165,180,252,.55)";
+      card.style.outlineOffset = "2px";
     }
   }
 
-  // ===== Viewer =====
-  async function openViewer(id) {
-    const it = await get(id);
-    if (!it) return;
-    currentId = id;
+  return card;
+}
 
-    viewerName.textContent = it.name || "(sem nome)";
-    viewerInfo.textContent = `${it.folder || "Sem pasta"} • ${humanBytes(it.size || 0)} • ${fmtDate(it.createdAt || "")}`;
+async function mediaCard(meta, opts = {}){
+  const card = document.createElement("article");
+  card.className = "card";
+  card.tabIndex = 0;
 
-    viewerBody.innerHTML = "";
-    const url = objectURLFor(it);
+  const head = document.createElement("div");
+  head.className = "cardHead";
 
-    if (it.type === "image") {
+  const title = document.createElement("div");
+  title.className = "cardTitle";
+  title.textContent = meta.name || "(sem nome)";
+
+  const kebab = document.createElement("button");
+  kebab.className = "kebab";
+  kebab.type = "button";
+  kebab.textContent = "⋯";
+  kebab.title = "Opções";
+
+  kebab.onclick = (e) => {
+    e.stopPropagation();
+    const r = kebab.getBoundingClientRect();
+    openMenuAt(r.left, r.bottom + 6, [
+      { label: "Abrir", onClick: () => openViewer(meta.id) },
+      { label: "Excluir", danger: true, onClick: async () => {
+          const ok = confirm("Excluir este arquivo?");
+          if (!ok) return;
+          await dbDeleteMedia(meta.id);
+          await refreshFromDB();
+          toast("Arquivo excluído.");
+          render();
+        }
+      },
+    ]);
+  };
+
+  head.appendChild(title);
+  head.appendChild(kebab);
+
+  const folderName = meta.folderId
+    ? (state.folders.find(f => f.id === meta.folderId)?.name || "Pasta")
+    : "Raiz";
+
+  const sub = document.createElement("div");
+  sub.className = "cardSub";
+  sub.textContent = `${meta.type === "video" ? "Vídeo" : "Imagem"} · ${folderName}`;
+
+  const thumb = document.createElement("div");
+  thumb.className = "thumb";
+  const badge = document.createElement("div");
+  badge.className = "badge";
+  badge.textContent = meta.type === "video" ? "Vídeo" : "Imagem";
+  thumb.appendChild(badge);
+
+  // thumb real
+  const rec = await dbGetBlobs(meta.id);
+  if (rec?.thumb){
+    const url = URL.createObjectURL(rec.thumb);
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = meta.name || "thumb";
+    img.onload = () => URL.revokeObjectURL(url);
+    thumb.appendChild(img);
+  } else {
+    // fallback visual
+    const ph = document.createElement("div");
+    ph.style.color = "rgba(17,24,39,.45)";
+    ph.style.fontSize = "13px";
+    ph.textContent = meta.type === "video" ? "Sem miniatura" : "—";
+    thumb.appendChild(ph);
+  }
+
+  card.appendChild(head);
+  card.appendChild(sub);
+  card.appendChild(thumb);
+
+  card.onclick = () => openViewer(meta.id);
+
+  if (opts.highlight){
+    const q = opts.highlight;
+    if ((meta.nameLower || "").includes(q)){
+      card.style.outline = "2px solid rgba(165,180,252,.55)";
+      card.style.outlineOffset = "2px";
+    }
+  }
+
+  return card;
+}
+
+/* ---------------- Folder modal ---------------- */
+
+function openFolderModal(folderId = null){
+  state.editingFolderId = folderId;
+
+  const editing = folderId ? state.folders.find(f => f.id === folderId) : null;
+
+  els.folderModalTitle.textContent = editing ? "Editar pasta" : "Nova pasta";
+  els.folderName.value = editing?.name || "";
+  els.folderDate.value = editing?.createdISO || todayISO();
+
+  els.folderModal.showModal();
+  els.folderName.focus();
+}
+
+els.folderCancel.addEventListener("click", () => els.folderModal.close());
+
+els.folderForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const name = els.folderName.value.trim();
+  const createdISO = els.folderDate.value;
+
+  if (!name) return;
+
+  const now = Date.now();
+
+  const folder = state.editingFolderId
+    ? { ...state.folders.find(f => f.id === state.editingFolderId) }
+    : { id: uid(), createdAt: now };
+
+  folder.name = name;
+  folder.nameLower = name.toLowerCase();
+  folder.createdISO = createdISO;
+
+  await dbPutFolder(folder);
+  await refreshFromDB();
+
+  els.folderModal.close();
+  toast(state.editingFolderId ? "Pasta atualizada." : "Pasta criada.");
+  state.editingFolderId = null;
+  render();
+});
+
+/* ---------------- Viewer ---------------- */
+
+async function openViewer(mediaId){
+  state.viewingMediaId = mediaId;
+  const meta = state.media.find(m => m.id === mediaId);
+  if (!meta) return;
+
+  const folderName = meta.folderId
+    ? (state.folders.find(f => f.id === meta.folderId)?.name || "Pasta")
+    : "Raiz";
+
+  els.viewerName.textContent = meta.name || "(sem nome)";
+  els.viewerSub.textContent = `${meta.type === "video" ? "Vídeo" : "Imagem"} · ${folderName} · ${fmtBytes(meta.size || 0)}`;
+
+  els.viewerRename.value = meta.name || "";
+  fillMoveSelect(meta.folderId || "");
+
+  els.viewerBody.innerHTML = "";
+  const rec = await dbGetBlobs(mediaId);
+  if (!rec?.blob){
+    els.viewerBody.textContent = "Arquivo não encontrado.";
+  } else {
+    const url = URL.createObjectURL(rec.blob);
+    if (meta.type === "video"){
+      const v = document.createElement("video");
+      v.controls = true;
+      v.src = url;
+      v.onloadeddata = () => {};
+      v.onended = () => {};
+      v.onpause = () => {};
+      v.onplay = () => {};
+      v.onloadedmetadata = () => {};
+      v.onemptied = () => {};
+      v.onstalled = () => {};
+      v.onwaiting = () => {};
+      v.oncanplay = () => {};
+      v.oncanplaythrough = () => {};
+      v.onabort = () => {};
+      v.onerror = () => {};
+      v.onclose = () => {};
+      v.onloadeddata = () => {};
+      els.viewerBody.appendChild(v);
+    } else {
       const img = document.createElement("img");
       img.src = url;
-      img.alt = it.name || "";
-      viewerBody.appendChild(img);
-    } else if (it.type === "video") {
-      const v = document.createElement("video");
-      v.src = url;
-      v.controls = true;
-      v.autoplay = true;
-      v.preload = "metadata";
-      viewerBody.appendChild(v);
+      img.alt = meta.name || "imagem";
+      els.viewerBody.appendChild(img);
+    }
+
+    // limpa url ao fechar
+    els.viewerModal.addEventListener("close", () => URL.revokeObjectURL(url), { once:true });
+  }
+
+  els.viewerModal.showModal();
+}
+
+function fillMoveSelect(currentFolderId){
+  els.viewerMove.innerHTML = "";
+  const optRoot = document.createElement("option");
+  optRoot.value = "";
+  optRoot.textContent = "Raiz";
+  els.viewerMove.appendChild(optRoot);
+
+  const folders = [...state.folders].sort((a,b) => a.nameLower.localeCompare(b.nameLower));
+  for (const f of folders){
+    const opt = document.createElement("option");
+    opt.value = f.id;
+    opt.textContent = f.name;
+    els.viewerMove.appendChild(opt);
+  }
+
+  els.viewerMove.value = currentFolderId || "";
+}
+
+els.viewerClose.addEventListener("click", () => els.viewerModal.close());
+
+els.viewerDelete.addEventListener("click", async () => {
+  const id = state.viewingMediaId;
+  if (!id) return;
+  const ok = confirm("Excluir este arquivo?");
+  if (!ok) return;
+  await dbDeleteMedia(id);
+  await refreshFromDB();
+  els.viewerModal.close();
+  toast("Arquivo excluído.");
+  render();
+});
+
+els.viewerApply.addEventListener("click", async () => {
+  const id = state.viewingMediaId;
+  if (!id) return;
+
+  const newName = els.viewerRename.value.trim() || "(sem nome)";
+  const newFolder = els.viewerMove.value || null;
+
+  const updated = await dbUpdateMediaMeta(id, {
+    name: newName,
+    folderId: newFolder,
+  });
+
+  await refreshFromDB();
+  if (updated){
+    toast("Alterações aplicadas.");
+    els.viewerModal.close();
+    // se moveu pra outra pasta e você estava dentro, atualiza a navegação “silenciosamente”
+    render();
+  }
+});
+
+/* ---------------- Search ---------------- */
+
+function setSearchOpen(open){
+  state.searchOpen = open;
+  els.searchbar.hidden = !open;
+  if (open){
+    els.searchInput.focus();
+    els.searchInput.select();
+  } else {
+    els.searchInput.value = "";
+    state.searchQuery = "";
+  }
+  render();
+}
+
+els.btnSearch.addEventListener("click", () => setSearchOpen(!state.searchOpen));
+
+els.searchInput.addEventListener("input", () => {
+  state.searchQuery = els.searchInput.value;
+  render();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape"){
+    if (state.searchOpen){
+      setSearchOpen(false);
+      e.preventDefault();
+    }
+    closeMenu();
+    if (els.viewerModal.open) els.viewerModal.close();
+    if (els.folderModal.open) els.folderModal.close();
+  }
+
+  if (e.key === "Enter" && state.searchOpen){
+    const first = els.grid.querySelector(".card");
+    if (first){
+      first.click();
+      e.preventDefault();
+    }
+  }
+});
+
+/* ---------------- Add media ---------------- */
+
+els.btnAddMedia.addEventListener("click", () => {
+  els.filePicker.value = "";
+  els.filePicker.click();
+});
+
+els.filePicker.addEventListener("change", async () => {
+  const files = [...(els.filePicker.files || [])];
+  if (!files.length) return;
+
+  toast("Processando arquivos...");
+  for (const f of files){
+    const mime = f.type || "";
+    const isImg = mime.startsWith("image/");
+    const isVid = mime.startsWith("video/");
+
+    if (!isImg && !isVid) continue;
+
+    const id = uid();
+    const type = isVid ? "video" : "image";
+    const name = f.name || (type === "video" ? "video" : "imagem");
+    const createdAt = Date.now();
+
+    let thumb = null;
+    if (type === "image"){
+      thumb = await imgToThumbBlob(f);
     } else {
-      const a = document.createElement("a");
-      a.href = url;
-      a.target = "_blank";
-      a.rel = "noreferrer";
-      a.textContent = "Abrir arquivo";
-      viewerBody.appendChild(a);
+      thumb = await videoToThumbBlob(f);
     }
 
-    openModal();
+    const meta = {
+      id,
+      folderId: state.currentFolderId,   // adiciona na pasta atual; se estiver na raiz, fica solto
+      name,
+      nameLower: name.toLowerCase(),
+      type,
+      mime,
+      size: f.size || 0,
+      createdAt,
+    };
+
+    await dbPutMedia(meta, f, thumb);
   }
 
-  closeBtn.addEventListener("click", closeModal);
-  modalBackdrop.addEventListener("click", closeModal);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !modal.classList.contains("hidden")) closeModal();
-  });
+  await refreshFromDB();
+  toast("Adicionado.");
+  render();
+});
 
-  renameBtn.addEventListener("click", async () => {
-    if (!currentId) return;
-    const it = await get(currentId);
-    if (!it) return;
+/* ---------------- Add folder ---------------- */
 
-    const newName = prompt("Novo nome:", it.name || "");
-    if (!newName) return;
+els.btnAddFolder.addEventListener("click", () => openFolderModal(null));
 
-    it.name = newName.trim();
-    await put(it);
-    await reload();
-    await openViewer(it.id);
-  });
+/* ---------------- Boot ---------------- */
 
-  moveBtn.addEventListener("click", async () => {
-    if (!currentId) return;
-    const it = await get(currentId);
-    if (!it) return;
+async function refreshFromDB(){
+  state.folders = await dbGetAllFolders();
+  state.media = await dbGetAllMediaMeta();
+}
 
-    const newFolder = prompt("Mover para pasta:", it.folder || "Sem pasta");
-    if (!newFolder) return;
-
-    it.folder = newFolder.trim() || "Sem pasta";
-    await put(it);
-    await reload();
-    await openViewer(it.id);
-  });
-
-  downloadBtn.addEventListener("click", async () => {
-    if (!currentId) return;
-    const it = await get(currentId);
-    if (!it) return;
-
-    const blob = it.data instanceof Blob ? it.data : new Blob([it.data], { type: it.mime });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = it.name || "arquivo";
-    a.click();
-
-    URL.revokeObjectURL(url);
-  });
-
-  deleteBtn.addEventListener("click", async () => {
-    if (!currentId) return;
-    const it = await get(currentId);
-    if (!it) return;
-
-    if (!confirm(`Excluir "${it.name}"?`)) return;
-
-    await del(it.id);
-    revokeURL(it.id);
-    currentId = null;
-    closeModal();
-    await reload();
-  });
-
-  // ===== Upload =====
-  pickBtn.addEventListener("click", () => fileInput.click());
-
-  addBtn.addEventListener("click", async () => {
-    await addFiles(fileInput.files);
-    fileInput.value = "";
-  });
-
-  async function addFiles(fileList) {
-    const files = [...(fileList || [])];
-    if (files.length === 0) { setStatus("Escolha arquivos primeiro."); return; }
-
-    const folder = (folderInput.value || "Sem pasta").trim() || "Sem pasta";
-
-    addBtn.disabled = true;
-    pickBtn.disabled = true;
-    setStatus(`Salvando ${files.length} arquivo(s)…`);
-
-    let ok = 0;
-    for (const f of files) {
-      try {
-        const item = {
-          id: uid(),
-          name: f.name,
-          folder,
-          mime: f.type || "application/octet-stream",
-          type: guessType(f.type),
-          size: f.size,
-          createdAt: new Date().toISOString(),
-          data: f
-        };
-        await put(item);
-        ok++;
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    addBtn.disabled = false;
-    pickBtn.disabled = false;
-
-    setStatus(ok ? `Adicionado: ${ok}` : "Nada foi adicionado.");
-    setTimeout(() => setStatus(""), 1400);
-
-    await reload();
-  }
-
-  dropzone.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    dropzone.style.borderColor = "rgba(58,116,255,.55)";
-  });
-  dropzone.addEventListener("dragleave", () => {
-    dropzone.style.borderColor = "rgba(233,238,245,.25)";
-  });
-  dropzone.addEventListener("drop", async (e) => {
-    e.preventDefault();
-    dropzone.style.borderColor = "rgba(233,238,245,.25)";
-    await addFiles(e.dataTransfer?.files);
-  });
-
-  // ===== Filters =====
-  const rerender = () => {
-    clearTimeout(window.__r);
-    window.__r = setTimeout(render, 80);
-  };
-  searchInput.addEventListener("input", rerender);
-  folderFilter.addEventListener("change", rerender);
-  typeFilter.addEventListener("change", rerender);
-  sortBy.addEventListener("change", rerender);
-
-  // ===== Backup =====
-  exportBtn.addEventListener("click", async () => {
-    setStatus("Exportando…");
-    const items = await getAll();
-
-    const packed = [];
-    for (const it of items) {
-      const buf = await it.data.arrayBuffer();
-      const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-      packed.push({ ...it, data: b64 });
-    }
-
-    const payload = { version: 1, exportedAt: new Date().toISOString(), items: packed };
-    const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "galeria-backup.json";
-    a.click();
-
-    URL.revokeObjectURL(url);
-    setStatus("");
-  });
-
-  importInput.addEventListener("change", async () => {
-    const file = importInput.files?.[0];
-    if (!file) return;
-
-    setStatus("Importando…");
-    try {
-      const payload = JSON.parse(await file.text());
-      if (!payload?.items) throw new Error("Formato inválido");
-
-      let count = 0;
-      for (const it of payload.items) {
-        const bin = Uint8Array.from(atob(it.data), c => c.charCodeAt(0));
-        const blob = new Blob([bin], { type: it.mime || "application/octet-stream" });
-
-        await put({
-          id: it.id || uid(),
-          name: it.name || "arquivo",
-          folder: it.folder || "Sem pasta",
-          mime: it.mime || "application/octet-stream",
-          type: it.type || guessType(it.mime),
-          size: it.size || blob.size,
-          createdAt: it.createdAt || new Date().toISOString(),
-          data: blob
-        });
-        count++;
-      }
-
-      setStatus(`Importado: ${count}`);
-      setTimeout(() => setStatus(""), 1400);
-      await reload();
-    } catch (e) {
-      console.error(e);
-      setStatus("Falha ao importar backup.");
-    } finally {
-      importInput.value = "";
-    }
-  });
-
-  clearBtn.addEventListener("click", async () => {
-    if (!confirm("Isso vai apagar tudo salvo neste navegador. Continuar?")) return;
-
-    await clearDB();
-    for (const it of itemsCache) revokeURL(it.id);
-    itemsCache = [];
-    currentId = null;
-    closeModal();
-    await reload();
-  });
-
-  // ===== Boot =====
-  (async function boot() {
-    db = await openDB();
-    await reload();
-  })();
+(async function init(){
+  await refreshFromDB();
+  render();
 })();

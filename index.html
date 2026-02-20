@@ -1,99 +1,110 @@
 <!doctype html>
-<html lang="pt-br">
+<html lang="pt-BR">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Galeria</title>
-  <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="styles.css" />
+  <meta name="color-scheme" content="light" />
 </head>
 <body>
-  <header class="top">
-    <div class="brand">
-      <div class="title">Galeria</div>
-      <div class="subtitle">salvo no navegador (IndexedDB)</div>
+  <header class="topbar">
+    <div class="brand" title="Galeria local (salva no seu navegador)">
+      <span class="dot"></span>
+      <span>Galeria</span>
     </div>
 
     <div class="actions">
-      <button id="exportBtn" class="btn">Exportar</button>
-      <label class="btn ghost">
-        Importar
-        <input id="importInput" type="file" accept="application/json" hidden />
-      </label>
-      <button id="clearBtn" class="btn danger">Apagar tudo</button>
+      <button class="btn" id="btnAddMedia" type="button">Adicionar (foto)</button>
+      <button class="btn" id="btnAddFolder" type="button">Adicionar pasta</button>
+      <button class="btn" id="btnSearch" type="button">Pesquisar</button>
     </div>
   </header>
 
-  <section class="bar">
-    <input id="searchInput" class="input" placeholder="Buscar por nome..." />
-    <select id="folderFilter" class="input">
-      <option value="__ALL__">Todas as pastas</option>
-    </select>
-    <select id="typeFilter" class="input">
-      <option value="all">Tudo</option>
-      <option value="image">Imagens</option>
-      <option value="video">Vídeos</option>
-    </select>
-    <select id="sortBy" class="input">
-      <option value="new">Mais recentes</option>
-      <option value="name">Nome (A–Z)</option>
-      <option value="size">Tamanho (maior)</option>
-    </select>
-  </section>
-
-  <section class="upload">
-    <input id="folderInput" class="input" placeholder="Pasta para adicionar (ex: Anime, Wallpapers)" />
-    <input id="fileInput" type="file" multiple accept="image/*,video/*" hidden />
-    <button id="pickBtn" class="btn">Escolher arquivos</button>
-    <button id="addBtn" class="btn primary">Adicionar</button>
-    <div id="status" class="status"></div>
-  </section>
-
-  <section id="dropzone" class="dropzone">
-    Arraste e solte arquivos aqui
-  </section>
-
-  <main>
-    <div class="meta">
-      <div id="countLabel" class="muted"></div>
-      <div id="quotaLabel" class="muted"></div>
-    </div>
-    <div id="grid" class="grid"></div>
-  </main>
-
-  <!-- Modal compatível (sem <dialog>) -->
-  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modalBackdrop" id="modalBackdrop"></div>
-    <div class="modalPanel" role="document">
-      <div class="modalTop">
-        <div>
-          <div id="viewerName" class="viewerName"></div>
-          <div id="viewerInfo" class="viewerInfo"></div>
-        </div>
-        <div class="viewerBtns">
-          <button id="renameBtn" class="btn ghost">Renomear</button>
-          <button id="moveBtn" class="btn ghost">Mover</button>
-          <button id="downloadBtn" class="btn">Baixar</button>
-          <button id="deleteBtn" class="btn danger">Excluir</button>
-          <button id="closeBtn" class="btn ghost">Fechar</button>
-        </div>
-      </div>
-      <div id="viewerBody" class="viewerBody"></div>
+  <div class="searchbar" id="searchbar" hidden>
+    <div class="searchwrap">
+      <input id="searchInput" class="search" type="search" placeholder="Pesquisar pastas, nomes, arquivos..." autocomplete="off" />
+      <div class="hint">Dica: ESC fecha · Enter abre o primeiro resultado</div>
     </div>
   </div>
 
-  <template id="cardTpl">
-    <article class="card" tabindex="0">
-      <div class="thumb"></div>
-      <div class="cardBody">
-        <div class="name"></div>
-        <div class="sub">
-          <span class="folder"></span>
-          <span class="size"></span>
+  <main class="main">
+    <div class="crumbs" id="crumbs"></div>
+
+    <section class="grid" id="grid"></section>
+
+    <section class="empty" id="empty" hidden>
+      <div class="emptyCard">
+        <div class="emptyTitle">Nada aqui ainda.</div>
+        <div class="emptyText">
+          Use <b>Adicionar pasta</b> pra organizar ou <b>Adicionar (foto)</b> pra colocar imagens/vídeos.
+        </div>
+        <div class="emptyText small">
+          Tudo fica salvo localmente neste navegador (IndexedDB).
         </div>
       </div>
-    </article>
-  </template>
+    </section>
+  </main>
 
-  <script src="./app.js"></script>
+  <input id="filePicker" type="file" accept="image/*,video/*" multiple hidden />
+
+  <!-- Modal: Pasta (criar/editar) -->
+  <dialog class="modal" id="folderModal">
+    <form method="dialog" class="modalCard" id="folderForm">
+      <div class="modalTitle" id="folderModalTitle">Nova pasta</div>
+
+      <label class="field">
+        <span>Nome</span>
+        <input id="folderName" type="text" maxlength="80" placeholder="Ex.: Viagens, Estudos, 3D..." required />
+      </label>
+
+      <label class="field">
+        <span>Data de criação</span>
+        <input id="folderDate" type="date" required />
+      </label>
+
+      <div class="modalRow">
+        <button class="link" value="cancel" type="button" id="folderCancel">Cancelar</button>
+        <button class="btn primary" value="default" type="submit" id="folderSave">Salvar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Modal: Visualizador -->
+  <dialog class="modal" id="viewerModal">
+    <div class="viewer">
+      <div class="viewerTop">
+        <div class="viewerMeta">
+          <div class="viewerName" id="viewerName">Arquivo</div>
+          <div class="viewerSub" id="viewerSub">—</div>
+        </div>
+
+        <div class="viewerControls">
+          <button class="link danger" type="button" id="viewerDelete">Excluir</button>
+          <button class="link" type="button" id="viewerClose">Fechar</button>
+        </div>
+      </div>
+
+      <div class="viewerBody" id="viewerBody"></div>
+
+      <div class="viewerBottom">
+        <label class="field inline">
+          <span>Nome</span>
+          <input id="viewerRename" type="text" maxlength="120" />
+        </label>
+
+        <label class="field inline">
+          <span>Mover para</span>
+          <select id="viewerMove"></select>
+        </label>
+
+        <button class="btn primary" type="button" id="viewerApply">Aplicar</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="app.js"></script>
 </body>
 </html>

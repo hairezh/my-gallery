@@ -1,52 +1,102 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
+  <link rel="icon" type="image/png" href="https://i.pinimg.com/1200x/97/1d/bf/971dbf5a9b4249aa231c6993774a89ab.jpg">
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Galeria</title>
   <link rel="stylesheet" href="styles.css" />
-  <meta name="color-scheme" content="light" />
 </head>
+
 <body>
-  <header class="topbar">
-    <div class="brand" title="Galeria local (salva no seu navegador)">
-      <span class="dot"></span>
-      <span>Galeria</span>
+  <div class="app">
+
+    <div class="topbar">
+      <div class="brand">
+        <img alt="icon" src="https://i.pinimg.com/originals/da/b4/cb/dab4cbf31e4e8d7688b0e830d5d640f1.gif">
+        <div class="title">
+          <b>Galeria</b>
+          <span>imagens & vídeos (salvo no navegador)</span>
+        </div>
+      </div>
+
+      <div class="tools">
+        <!-- exatamente os botões -->
+        <button class="btn primary" id="btnAddMedia" type="button">Adicionar (foto)</button>
+        <button class="btn" id="btnAddFolder" type="button">Adicionar pasta</button>
+        <button class="btn" id="btnSearch" type="button">Pesquisar</button>
+      </div>
     </div>
 
-    <div class="actions">
-      <button class="btn" id="btnAddMedia" type="button">Adicionar (foto)</button>
-      <button class="btn" id="btnAddFolder" type="button">Adicionar pasta</button>
-      <button class="btn" id="btnSearch" type="button">Pesquisar</button>
-    </div>
-  </header>
+    <div class="layout">
+      <!-- dock só “decorativo”/informativo, no mesmo estilo do tema -->
+      <aside class="dock" aria-label="Dock">
+        <div class="dockGroup">
+          <div class="icoBtn active" aria-hidden="true">
+            <span>🖼️</span>
+            <span class="tip">Galeria</span>
+          </div>
+          <div class="miniLabel">hover: preview</div>
+        </div>
 
-  <div class="searchbar" id="searchbar" hidden>
-    <div class="searchwrap">
-      <input id="searchInput" class="search" type="search" placeholder="Pesquisar pastas, nomes, arquivos..." autocomplete="off" />
-      <div class="hint">Dica: ESC fecha · Enter abre o primeiro resultado</div>
+        <div class="dockGroup">
+          <div class="miniLabel">atalhos</div>
+          <div class="icoBtn" aria-hidden="true">
+            <span>⎋</span>
+            <span class="tip">ESC fecha</span>
+          </div>
+          <div class="icoBtn" aria-hidden="true">
+            <span>⏎</span>
+            <span class="tip">Enter abre</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section class="panel">
+          <div class="panelHead">
+            <div class="tools">
+              <span class="badge" id="badgePath">Raiz</span>
+              <span class="badge" id="badgeCount">0 itens</span>
+              <span class="badge" id="badgeMode">modo: normal</span>
+            </div>
+
+            <div class="tools">
+              <input id="searchInput" class="searchInline" type="search"
+                     placeholder="Pesquisar pastas, nomes, arquivos..."
+                     autocomplete="off" hidden />
+              <span class="badge subtle" id="searchHint" hidden>ESC fecha</span>
+            </div>
+          </div>
+
+          <div class="panelBody">
+            <div class="crumbs" id="crumbs"></div>
+
+            <main id="grid" class="grid" aria-label="Galeria"></main>
+
+            <section class="empty" id="empty" hidden>
+              <div class="emptyCard">
+                <div class="emptyTitle">Nada aqui ainda.</div>
+                <div class="emptyText">
+                  Use <b>Adicionar pasta</b> ou <b>Adicionar (foto)</b>.
+                </div>
+                <div class="emptyText small">
+                  Tudo fica salvo localmente (IndexedDB).
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
     </div>
   </div>
 
-  <main class="main">
-    <div class="crumbs" id="crumbs"></div>
-
-    <section class="grid" id="grid"></section>
-
-    <section class="empty" id="empty" hidden>
-      <div class="emptyCard">
-        <div class="emptyTitle">Nada aqui ainda.</div>
-        <div class="emptyText">
-          Use <b>Adicionar pasta</b> pra organizar ou <b>Adicionar (foto)</b> pra colocar imagens/vídeos.
-        </div>
-        <div class="emptyText small">
-          Tudo fica salvo localmente neste navegador (IndexedDB).
-        </div>
-      </div>
-    </section>
-  </main>
-
   <input id="filePicker" type="file" accept="image/*,video/*" multiple hidden />
+
+  <!-- Hover preview (centro + fundo escuro) -->
+  <div id="hoverPreview" class="hoverPreview" aria-hidden="true">
+    <div class="hoverCard" id="hoverCard"></div>
+  </div>
 
   <!-- Modal: Pasta (criar/editar) -->
   <dialog class="modal" id="folderModal">
@@ -64,8 +114,8 @@
       </label>
 
       <div class="modalRow">
-        <button class="link" value="cancel" type="button" id="folderCancel">Cancelar</button>
-        <button class="btn primary" value="default" type="submit" id="folderSave">Salvar</button>
+        <button class="btn" type="button" id="folderCancel">Cancelar</button>
+        <button class="btn primary" type="submit" id="folderSave">Salvar</button>
       </div>
     </form>
   </dialog>
@@ -80,8 +130,8 @@
         </div>
 
         <div class="viewerControls">
-          <button class="link danger" type="button" id="viewerDelete">Excluir</button>
-          <button class="link" type="button" id="viewerClose">Fechar</button>
+          <button class="btn danger" type="button" id="viewerDelete">Excluir</button>
+          <button class="btn" type="button" id="viewerClose">Fechar</button>
         </div>
       </div>
 
@@ -103,7 +153,9 @@
     </div>
   </dialog>
 
-  <div class="toast" id="toast" hidden></div>
+  <div id="toast" class="toast" role="status" aria-live="polite">
+    <span id="toastText">OK</span>
+  </div>
 
   <script src="app.js"></script>
 </body>

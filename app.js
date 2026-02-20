@@ -1,7 +1,5 @@
 /* Galeria local (IndexedDB) — imagens e vídeos
-   - Pastas com nome e data editáveis
-   - Upload local (blobs no IndexedDB)
-   - Busca por pasta + arquivo (nome)
+   Tema escuro + thumbs pequenos + hover preview central
 */
 
 const $ = (sel) => document.querySelector(sel);
@@ -17,8 +15,12 @@ const els = {
 
   filePicker: $("#filePicker"),
 
-  searchbar: $("#searchbar"),
+  badgePath: $("#badgePath"),
+  badgeCount: $("#badgeCount"),
+  badgeMode: $("#badgeMode"),
+
   searchInput: $("#searchInput"),
+  searchHint: $("#searchHint"),
 
   folderModal: $("#folderModal"),
   folderForm: $("#folderForm"),
@@ -37,20 +39,30 @@ const els = {
   viewerMove: $("#viewerMove"),
   viewerApply: $("#viewerApply"),
 
+  hoverPreview: $("#hoverPreview"),
+  hoverCard: $("#hoverCard"),
+
   toast: $("#toast"),
+  toastText: $("#toastText"),
 };
 
 const state = {
-  currentFolderId: null,     // null = raiz
+  currentFolderId: null,
   searchOpen: false,
   searchQuery: "",
 
   folders: [],
-  media: [],                 // metadados
-  openMenuEl: null,
+  media: [],
 
   editingFolderId: null,
   viewingMediaId: null,
+
+  hover: {
+    id: null,
+    url: null,
+    timerIn: null,
+    timerOut: null,
+  }
 };
 
 function uid(){
@@ -65,7 +77,6 @@ function todayISO(){
 }
 
 function fmtDate(iso){
-  // iso: YYYY-MM-DD
   if (!iso) return "—";
   const [y,m,dd] = iso.split("-").map(Number);
   const d = new Date(y, m-1, dd);
@@ -73,18 +84,18 @@ function fmtDate(iso){
 }
 
 function fmtBytes(n){
-  if (n === 0) return "0 B";
+  if (!n) return "0 B";
   const k = 1024;
   const sizes = ["B","KB","MB","GB","TB"];
   const i = Math.floor(Math.log(n)/Math.log(k));
   return (n/Math.pow(k,i)).toFixed(i ? 1 : 0) + " " + sizes[i];
 }
 
-function toast(msg){
-  els.toast.textContent = msg;
-  els.toast.hidden = false;
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => (els.toast.hidden = true), 2200);
+function showToast(msg){
+  els.toastText.textContent = msg;
+  els.toast.classList.add("show");
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => els.toast.classList.remove("show"), 1100);
 }
 
 /* ---------------- IndexedDB ---------------- */
@@ -107,7 +118,6 @@ function idbOpen(){
       media.createIndex("nameLower", "nameLower", { unique: false });
       media.createIndex("createdAt", "createdAt", { unique: false });
 
-      // blobs: original + thumb
       db.createObjectStore("blobs", { keyPath: "id" });
     };
     req.onsuccess = () => resolve(req.result);
@@ -155,9 +165,7 @@ async function dbPutFolder(folder){
 }
 
 async function dbDeleteFolder(folderId){
-  // apaga pasta + move media pra raiz? aqui: apaga pasta e TAMBÉM apaga mídia dela (mais “limpo”).
   return tx(["folders","media","blobs"], "readwrite", async (folders, media, blobs) => {
-    // buscar mídias da pasta
     const mids = await new Promise((res, rej) => {
       const idx = media.index("folderId");
       const req = idx.getAll(folderId);
@@ -215,10 +223,9 @@ async function dbUpdateMediaMeta(mediaId, patch){
   );
 }
 
-/* ---------------- Thumbs ---------------- */
+/* ---------------- thumbs ---------------- */
 
 async function imgToThumbBlob(fileBlob){
-  // reduz para ~360px largura (qualidade ok) pra ficar leve
   const img = new Image();
   const url = URL.createObjectURL(fileBlob);
   try{
@@ -228,7 +235,7 @@ async function imgToThumbBlob(fileBlob){
       img.src = url;
     });
 
-    const maxW = 420;
+    const maxW = 360;
     const ratio = img.width / img.height || 1;
     const w = Math.min(maxW, img.width);
     const h = Math.round(w / ratio);
@@ -260,7 +267,6 @@ async function videoToThumbBlob(fileBlob){
       video.onerror = rej;
     });
 
-    // tenta ir um tiquinho pra frente pra evitar frame preto
     const t = Math.min(0.25, (video.duration || 1) / 4);
     await new Promise((res) => {
       const handler = () => {
@@ -271,7 +277,7 @@ async function videoToThumbBlob(fileBlob){
       video.currentTime = t;
     });
 
-    const w = 420;
+    const w = 360;
     const ratio = (video.videoWidth || 16) / (video.videoHeight || 10);
     const h = Math.round(w / ratio);
 
@@ -284,288 +290,247 @@ async function videoToThumbBlob(fileBlob){
     const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
     return blob;
   } catch {
-    // fallback: thumb null
     return null;
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
-/* ---------------- UI / Render ---------------- */
+/* ---------------- hover preview ---------------- */
 
-function closeMenu(){
-  if (state.openMenuEl){
-    state.openMenuEl.remove();
-    state.openMenuEl = null;
-    document.removeEventListener("click", closeMenu, true);
+function canHover(){
+  return window.matchMedia && window.matchMedia("(hover: hover)").matches;
+}
+
+function clearHoverURL(){
+  if (state.hover.url){
+    URL.revokeObjectURL(state.hover.url);
+    state.hover.url = null;
   }
 }
 
-function openMenuAt(x, y, items){
-  closeMenu();
-  const menu = document.createElement("div");
-  menu.className = "menu";
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
+function hideHoverPreview(){
+  clearTimeout(state.hover.timerIn);
+  clearTimeout(state.hover.timerOut);
+  state.hover.timerOut = setTimeout(() => {
+    state.hover.id = null;
+    els.hoverCard.innerHTML = "";
+    els.hoverPreview.classList.remove("show");
+    clearHoverURL();
+  }, 60);
+}
 
-  for (const it of items){
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = it.label;
-    if (it.danger) b.classList.add("danger");
-    b.addEventListener("click", () => { closeMenu(); it.onClick(); });
-    menu.appendChild(b);
+async function showHoverPreview(mediaId){
+  if (!canHover()) return;
+
+  clearTimeout(state.hover.timerOut);
+  clearTimeout(state.hover.timerIn);
+
+  state.hover.timerIn = setTimeout(async () => {
+    // se mudou de item no meio, ignora
+    state.hover.id = mediaId;
+
+    const meta = state.media.find(m => m.id === mediaId);
+    if (!meta) return;
+
+    const rec = await dbGetBlobs(mediaId);
+    if (!rec?.blob) return;
+
+    // troca url
+    clearHoverURL();
+    state.hover.url = URL.createObjectURL(rec.blob);
+
+    els.hoverCard.innerHTML = "";
+
+    if (meta.type === "video"){
+      const v = document.createElement("video");
+      v.src = state.hover.url;
+      v.muted = true;
+      v.autoplay = true;
+      v.loop = true;
+      v.playsInline = true;
+      els.hoverCard.appendChild(v);
+    } else {
+      const img = document.createElement("img");
+      img.src = state.hover.url;
+      img.alt = meta.name || "preview";
+      els.hoverCard.appendChild(img);
+    }
+
+    els.hoverPreview.classList.add("show");
+  }, 120);
+}
+
+/* ---------------- render ---------------- */
+
+function setBadges(){
+  const folder = state.currentFolderId
+    ? state.folders.find(f => f.id === state.currentFolderId)
+    : null;
+
+  els.badgePath.textContent = folder ? `Pasta: ${folder.name}` : "Raiz";
+
+  const q = state.searchQuery.trim();
+  els.badgeMode.textContent = q ? "modo: busca" : "modo: normal";
+
+  const count = computeVisibleCount();
+  els.badgeCount.textContent = `${count} itens`;
+}
+
+function computeVisibleCount(){
+  const q = state.searchQuery.trim().toLowerCase();
+  if (q){
+    const folderHits = state.folders.filter(f => f.nameLower.includes(q) || (f.createdISO || "").includes(q));
+    const mediaHits = state.media.filter(m => (m.nameLower || "").includes(q) || (m.type || "").includes(q) || (m.mime || "").includes(q));
+    return folderHits.length + mediaHits.length;
   }
 
-  document.body.appendChild(menu);
-  state.openMenuEl = menu;
+  if (!state.currentFolderId){
+    const folders = state.folders.length;
+    const loose = state.media.filter(m => !m.folderId).length;
+    return folders + loose;
+  }
 
-  // evita sair da tela
-  const r = menu.getBoundingClientRect();
-  const pad = 8;
-  let nx = x, ny = y;
-  if (r.right > innerWidth - pad) nx = Math.max(pad, innerWidth - r.width - pad);
-  if (r.bottom > innerHeight - pad) ny = Math.max(pad, innerHeight - r.height - pad);
-  menu.style.left = `${nx}px`;
-  menu.style.top = `${ny}px`;
-
-  setTimeout(() => document.addEventListener("click", closeMenu, true), 0);
+  return state.media.filter(m => m.folderId === state.currentFolderId).length;
 }
 
 function setCrumbs(){
-  const root = document.createElement("div");
   const wrap = document.createElement("div");
-  wrap.style.display = "flex";
-  wrap.style.alignItems = "center";
-  wrap.style.gap = "10px";
 
-  const aRoot = document.createElement("a");
-  aRoot.href = "#";
-  aRoot.textContent = "Raiz";
-  aRoot.onclick = (e) => {
+  const root = document.createElement("a");
+  root.href = "#";
+  root.className = "badge";
+  root.textContent = "Raiz";
+  root.onclick = (e) => {
     e.preventDefault();
     state.currentFolderId = null;
-    state.searchQuery = "";
     render();
   };
-
-  wrap.appendChild(aRoot);
+  wrap.appendChild(root);
 
   if (state.currentFolderId){
-    const folder = state.folders.find(f => f.id === state.currentFolderId);
-    const sep = document.createElement("span");
-    sep.textContent = "›";
-    const name = document.createElement("span");
-    name.textContent = folder?.name || "Pasta";
-    wrap.appendChild(sep);
-    wrap.appendChild(name);
+    const f = state.folders.find(x => x.id === state.currentFolderId);
+    const cur = document.createElement("span");
+    cur.className = "badge subtle";
+    cur.textContent = `› ${f?.name || "Pasta"}`;
+    wrap.appendChild(cur);
   }
 
   els.crumbs.innerHTML = "";
   els.crumbs.appendChild(wrap);
 }
 
-function isEmptyView(){
-  const hasFolders = state.folders.length > 0;
-  const hasMedia = state.media.length > 0;
-  return !hasFolders && !hasMedia;
+function isEmptyAll(){
+  return state.folders.length === 0 && state.media.length === 0;
 }
 
 async function render(){
   setCrumbs();
   els.grid.innerHTML = "";
-  els.empty.hidden = !isEmptyView();
+  els.empty.hidden = !isEmptyAll();
 
   const q = state.searchQuery.trim().toLowerCase();
+  setBadges();
 
-  // VIEW: busca
   if (q){
-    const folderHits = state.folders.filter(f =>
-      f.nameLower.includes(q) || (f.createdISO || "").includes(q)
-    );
+    const folderHits = state.folders
+      .filter(f => f.nameLower.includes(q) || (f.createdISO || "").includes(q))
+      .sort((a,b) => (b.createdISO||"").localeCompare(a.createdISO||""));
 
-    const mediaHits = state.media.filter(m =>
-      (m.nameLower || "").includes(q) ||
-      (m.type || "").includes(q) ||
-      (m.mime || "").includes(q)
-    );
+    const mediaHits = state.media
+      .filter(m => (m.nameLower || "").includes(q) || (m.type || "").includes(q) || (m.mime || "").includes(q))
+      .sort((a,b) => (b.createdAt||0) - (a.createdAt||0));
 
-    // pastas primeiro
-    for (const f of folderHits){
-      els.grid.appendChild(folderCard(f, { highlight: q }));
-    }
-    for (const m of mediaHits){
-      els.grid.appendChild(await mediaCard(m, { highlight: q }));
-    }
+    for (const f of folderHits) els.grid.appendChild(folderCube(f));
+    for (const m of mediaHits) els.grid.appendChild(await mediaCube(m));
 
     if (!folderHits.length && !mediaHits.length){
-      const ghost = document.createElement("div");
-      ghost.className = "emptyCard";
-      ghost.innerHTML = `<div class="emptyTitle">Sem resultados</div>
-        <div class="emptyText">Tente outra palavra (pasta, nome de arquivo, “video”, “image”, etc.).</div>`;
-      els.grid.appendChild(ghost);
+      const empty = document.createElement("div");
+      empty.className = "emptyCard";
+      empty.innerHTML = `<div class="emptyTitle">Sem resultados</div>
+        <div class="emptyText">Tente outro termo (pasta, nome do arquivo, “video”, “image”…).</div>`;
+      els.grid.appendChild(empty);
     }
     return;
   }
 
-  // VIEW: raiz
   if (!state.currentFolderId){
-    // pastas
     const folders = [...state.folders].sort((a,b) => (b.createdISO||"").localeCompare(a.createdISO||""));
-    for (const f of folders){
-      els.grid.appendChild(folderCard(f));
-    }
+    for (const f of folders) els.grid.appendChild(folderCube(f));
 
-    // mídia solta (folderId null)
-    const loose = state.media.filter(m => !m.folderId)
+    const loose = state.media
+      .filter(m => !m.folderId)
       .sort((a,b) => (b.createdAt||0) - (a.createdAt||0));
-    for (const m of loose){
-      els.grid.appendChild(await mediaCard(m));
-    }
+    for (const m of loose) els.grid.appendChild(await mediaCube(m));
     return;
   }
 
-  // VIEW: dentro da pasta
   const inside = state.media
     .filter(m => m.folderId === state.currentFolderId)
     .sort((a,b) => (b.createdAt||0) - (a.createdAt||0));
 
-  for (const m of inside){
-    els.grid.appendChild(await mediaCard(m));
-  }
+  for (const m of inside) els.grid.appendChild(await mediaCube(m));
 }
 
-function folderCard(folder, opts = {}){
-  const card = document.createElement("article");
-  card.className = "card";
-  card.tabIndex = 0;
+/* ---------------- cubes ---------------- */
 
-  const head = document.createElement("div");
-  head.className = "cardHead";
+function folderCube(folder){
+  const cube = document.createElement("section");
+  cube.className = "cube";
+  cube.tabIndex = 0;
 
-  const title = document.createElement("div");
-  title.className = "cardTitle";
-  title.textContent = folder.name;
+  const bg = document.createElement("div");
+  bg.className = "folderBg";
+  cube.appendChild(bg);
 
-  const kebab = document.createElement("button");
-  kebab.className = "kebab";
-  kebab.type = "button";
-  kebab.textContent = "⋯";
-  kebab.title = "Opções";
+  const ic = document.createElement("div");
+  ic.className = "folderIcon";
+  ic.textContent = "📁";
+  cube.appendChild(ic);
 
-  kebab.onclick = (e) => {
-    e.stopPropagation();
-    const r = kebab.getBoundingClientRect();
-    openMenuAt(r.left, r.bottom + 6, [
-      { label: "Editar pasta", onClick: () => openFolderModal(folder.id) },
-      { label: "Excluir pasta", danger: true, onClick: async () => {
-          const ok = confirm("Excluir esta pasta e todos os arquivos dentro dela?");
-          if (!ok) return;
-          await dbDeleteFolder(folder.id);
-          await refreshFromDB();
-          if (state.currentFolderId === folder.id) state.currentFolderId = null;
-          toast("Pasta excluída.");
-          render();
-        }
-      },
-    ]);
-  };
+  const meta = document.createElement("div");
+  meta.className = "meta";
 
-  head.appendChild(title);
-  head.appendChild(kebab);
+  const name = document.createElement("div");
+  name.className = "name";
+  name.textContent = folder.name;
 
-  const sub = document.createElement("div");
-  sub.className = "cardSub";
-  sub.textContent = `Criada em ${fmtDate(folder.createdISO)}`;
+  const mini = document.createElement("div");
+  mini.className = "mini";
+  mini.textContent = fmtDate(folder.createdISO);
 
-  const thumb = document.createElement("div");
-  thumb.className = "thumb";
-  const badge = document.createElement("div");
-  badge.className = "badge";
-  badge.textContent = "Pasta";
-  thumb.appendChild(badge);
+  meta.appendChild(name);
+  meta.appendChild(mini);
+  cube.appendChild(meta);
 
-  card.appendChild(head);
-  card.appendChild(sub);
-  card.appendChild(thumb);
-
-  card.onclick = () => {
+  cube.onclick = () => {
     state.currentFolderId = folder.id;
     render();
   };
 
-  // duplo clique = editar (sem botão extra)
-  card.ondblclick = (e) => {
+  cube.oncontextmenu = async (e) => {
     e.preventDefault();
-    openFolderModal(folder.id);
+    const okEdit = confirm("Editar esta pasta?\n\nOK = editar\nCancelar = não");
+    if (okEdit) openFolderModal(folder.id);
+    else {
+      const okDel = confirm("Excluir esta pasta e tudo dentro dela?");
+      if (!okDel) return;
+      await dbDeleteFolder(folder.id);
+      await refreshFromDB();
+      if (state.currentFolderId === folder.id) state.currentFolderId = null;
+      showToast("Pasta excluída.");
+      render();
+    }
   };
 
-  // highlight simples (busca)
-  if (opts.highlight){
-    const q = opts.highlight;
-    if (folder.nameLower.includes(q)){
-      card.style.outline = "2px solid rgba(165,180,252,.55)";
-      card.style.outlineOffset = "2px";
-    }
-  }
-
-  return card;
+  return cube;
 }
 
-async function mediaCard(meta, opts = {}){
-  const card = document.createElement("article");
-  card.className = "card";
-  card.tabIndex = 0;
+async function mediaCube(meta){
+  const cube = document.createElement("section");
+  cube.className = "cube";
+  cube.tabIndex = 0;
 
-  const head = document.createElement("div");
-  head.className = "cardHead";
-
-  const title = document.createElement("div");
-  title.className = "cardTitle";
-  title.textContent = meta.name || "(sem nome)";
-
-  const kebab = document.createElement("button");
-  kebab.className = "kebab";
-  kebab.type = "button";
-  kebab.textContent = "⋯";
-  kebab.title = "Opções";
-
-  kebab.onclick = (e) => {
-    e.stopPropagation();
-    const r = kebab.getBoundingClientRect();
-    openMenuAt(r.left, r.bottom + 6, [
-      { label: "Abrir", onClick: () => openViewer(meta.id) },
-      { label: "Excluir", danger: true, onClick: async () => {
-          const ok = confirm("Excluir este arquivo?");
-          if (!ok) return;
-          await dbDeleteMedia(meta.id);
-          await refreshFromDB();
-          toast("Arquivo excluído.");
-          render();
-        }
-      },
-    ]);
-  };
-
-  head.appendChild(title);
-  head.appendChild(kebab);
-
-  const folderName = meta.folderId
-    ? (state.folders.find(f => f.id === meta.folderId)?.name || "Pasta")
-    : "Raiz";
-
-  const sub = document.createElement("div");
-  sub.className = "cardSub";
-  sub.textContent = `${meta.type === "video" ? "Vídeo" : "Imagem"} · ${folderName}`;
-
-  const thumb = document.createElement("div");
-  thumb.className = "thumb";
-  const badge = document.createElement("div");
-  badge.className = "badge";
-  badge.textContent = meta.type === "video" ? "Vídeo" : "Imagem";
-  thumb.appendChild(badge);
-
-  // thumb real
   const rec = await dbGetBlobs(meta.id);
   if (rec?.thumb){
     const url = URL.createObjectURL(rec.thumb);
@@ -573,31 +538,51 @@ async function mediaCard(meta, opts = {}){
     img.src = url;
     img.alt = meta.name || "thumb";
     img.onload = () => URL.revokeObjectURL(url);
-    thumb.appendChild(img);
+    cube.appendChild(img);
   } else {
-    // fallback visual
     const ph = document.createElement("div");
-    ph.style.color = "rgba(17,24,39,.45)";
-    ph.style.fontSize = "13px";
-    ph.textContent = meta.type === "video" ? "Sem miniatura" : "—";
-    thumb.appendChild(ph);
+    ph.style.position = "absolute";
+    ph.style.inset = "0";
+    ph.style.display = "grid";
+    ph.style.placeItems = "center";
+    ph.style.color = "rgba(233,233,238,.55)";
+    ph.style.fontWeight = "900";
+    ph.textContent = meta.type === "video" ? "VÍDEO" : "IMAGEM";
+    cube.appendChild(ph);
   }
 
-  card.appendChild(head);
-  card.appendChild(sub);
-  card.appendChild(thumb);
+  const metaBar = document.createElement("div");
+  metaBar.className = "meta";
 
-  card.onclick = () => openViewer(meta.id);
+  const name = document.createElement("div");
+  name.className = "name";
+  name.textContent = meta.name || "(sem nome)";
 
-  if (opts.highlight){
-    const q = opts.highlight;
-    if ((meta.nameLower || "").includes(q)){
-      card.style.outline = "2px solid rgba(165,180,252,.55)";
-      card.style.outlineOffset = "2px";
-    }
-  }
+  const mini = document.createElement("div");
+  mini.className = "mini";
+  mini.textContent = meta.type === "video" ? "Vídeo" : "Imagem";
 
-  return card;
+  metaBar.appendChild(name);
+  metaBar.appendChild(mini);
+  cube.appendChild(metaBar);
+
+  // hover preview
+  cube.addEventListener("pointerenter", () => showHoverPreview(meta.id));
+  cube.addEventListener("pointerleave", hideHoverPreview);
+
+  cube.onclick = () => openViewer(meta.id);
+
+  cube.oncontextmenu = async (e) => {
+    e.preventDefault();
+    const ok = confirm("Excluir este arquivo?");
+    if (!ok) return;
+    await dbDeleteMedia(meta.id);
+    await refreshFromDB();
+    showToast("Arquivo excluído.");
+    render();
+  };
+
+  return cube;
 }
 
 /* ---------------- Folder modal ---------------- */
@@ -606,7 +591,6 @@ function openFolderModal(folderId = null){
   state.editingFolderId = folderId;
 
   const editing = folderId ? state.folders.find(f => f.id === folderId) : null;
-
   els.folderModalTitle.textContent = editing ? "Editar pasta" : "Nova pasta";
   els.folderName.value = editing?.name || "";
   els.folderDate.value = editing?.createdISO || todayISO();
@@ -622,11 +606,9 @@ els.folderForm.addEventListener("submit", async (e) => {
 
   const name = els.folderName.value.trim();
   const createdISO = els.folderDate.value;
-
   if (!name) return;
 
   const now = Date.now();
-
   const folder = state.editingFolderId
     ? { ...state.folders.find(f => f.id === state.editingFolderId) }
     : { id: uid(), createdAt: now };
@@ -639,12 +621,30 @@ els.folderForm.addEventListener("submit", async (e) => {
   await refreshFromDB();
 
   els.folderModal.close();
-  toast(state.editingFolderId ? "Pasta atualizada." : "Pasta criada.");
+  showToast(state.editingFolderId ? "Pasta atualizada." : "Pasta criada.");
   state.editingFolderId = null;
   render();
 });
 
 /* ---------------- Viewer ---------------- */
+
+function fillMoveSelect(currentFolderId){
+  els.viewerMove.innerHTML = "";
+  const optRoot = document.createElement("option");
+  optRoot.value = "";
+  optRoot.textContent = "Raiz";
+  els.viewerMove.appendChild(optRoot);
+
+  const folders = [...state.folders].sort((a,b) => a.nameLower.localeCompare(b.nameLower));
+  for (const f of folders){
+    const opt = document.createElement("option");
+    opt.value = f.id;
+    opt.textContent = f.name;
+    els.viewerMove.appendChild(opt);
+  }
+
+  els.viewerMove.value = currentFolderId || "";
+}
 
 async function openViewer(mediaId){
   state.viewingMediaId = mediaId;
@@ -667,24 +667,11 @@ async function openViewer(mediaId){
     els.viewerBody.textContent = "Arquivo não encontrado.";
   } else {
     const url = URL.createObjectURL(rec.blob);
+
     if (meta.type === "video"){
       const v = document.createElement("video");
       v.controls = true;
       v.src = url;
-      v.onloadeddata = () => {};
-      v.onended = () => {};
-      v.onpause = () => {};
-      v.onplay = () => {};
-      v.onloadedmetadata = () => {};
-      v.onemptied = () => {};
-      v.onstalled = () => {};
-      v.onwaiting = () => {};
-      v.oncanplay = () => {};
-      v.oncanplaythrough = () => {};
-      v.onabort = () => {};
-      v.onerror = () => {};
-      v.onclose = () => {};
-      v.onloadeddata = () => {};
       els.viewerBody.appendChild(v);
     } else {
       const img = document.createElement("img");
@@ -693,29 +680,10 @@ async function openViewer(mediaId){
       els.viewerBody.appendChild(img);
     }
 
-    // limpa url ao fechar
     els.viewerModal.addEventListener("close", () => URL.revokeObjectURL(url), { once:true });
   }
 
   els.viewerModal.showModal();
-}
-
-function fillMoveSelect(currentFolderId){
-  els.viewerMove.innerHTML = "";
-  const optRoot = document.createElement("option");
-  optRoot.value = "";
-  optRoot.textContent = "Raiz";
-  els.viewerMove.appendChild(optRoot);
-
-  const folders = [...state.folders].sort((a,b) => a.nameLower.localeCompare(b.nameLower));
-  for (const f of folders){
-    const opt = document.createElement("option");
-    opt.value = f.id;
-    opt.textContent = f.name;
-    els.viewerMove.appendChild(opt);
-  }
-
-  els.viewerMove.value = currentFolderId || "";
 }
 
 els.viewerClose.addEventListener("click", () => els.viewerModal.close());
@@ -728,7 +696,7 @@ els.viewerDelete.addEventListener("click", async () => {
   await dbDeleteMedia(id);
   await refreshFromDB();
   els.viewerModal.close();
-  toast("Arquivo excluído.");
+  showToast("Arquivo excluído.");
   render();
 });
 
@@ -739,25 +707,21 @@ els.viewerApply.addEventListener("click", async () => {
   const newName = els.viewerRename.value.trim() || "(sem nome)";
   const newFolder = els.viewerMove.value || null;
 
-  const updated = await dbUpdateMediaMeta(id, {
-    name: newName,
-    folderId: newFolder,
-  });
-
+  await dbUpdateMediaMeta(id, { name: newName, folderId: newFolder });
   await refreshFromDB();
-  if (updated){
-    toast("Alterações aplicadas.");
-    els.viewerModal.close();
-    // se moveu pra outra pasta e você estava dentro, atualiza a navegação “silenciosamente”
-    render();
-  }
+
+  showToast("Alterações aplicadas.");
+  els.viewerModal.close();
+  render();
 });
 
-/* ---------------- Search ---------------- */
+/* ---------------- Search / keys ---------------- */
 
 function setSearchOpen(open){
   state.searchOpen = open;
-  els.searchbar.hidden = !open;
+  els.searchInput.hidden = !open;
+  els.searchHint.hidden = !open;
+
   if (open){
     els.searchInput.focus();
     els.searchInput.select();
@@ -777,17 +741,15 @@ els.searchInput.addEventListener("input", () => {
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape"){
-    if (state.searchOpen){
-      setSearchOpen(false);
-      e.preventDefault();
-    }
-    closeMenu();
+    hideHoverPreview();
     if (els.viewerModal.open) els.viewerModal.close();
     if (els.folderModal.open) els.folderModal.close();
+    if (state.searchOpen) setSearchOpen(false);
+    e.preventDefault();
   }
 
   if (e.key === "Enter" && state.searchOpen){
-    const first = els.grid.querySelector(".card");
+    const first = els.grid.querySelector(".cube");
     if (first){
       first.click();
       e.preventDefault();
@@ -795,7 +757,7 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-/* ---------------- Add media ---------------- */
+/* ---------------- Add media / folder ---------------- */
 
 els.btnAddMedia.addEventListener("click", () => {
   els.filePicker.value = "";
@@ -806,12 +768,11 @@ els.filePicker.addEventListener("change", async () => {
   const files = [...(els.filePicker.files || [])];
   if (!files.length) return;
 
-  toast("Processando arquivos...");
+  showToast("Processando...");
   for (const f of files){
     const mime = f.type || "";
     const isImg = mime.startsWith("image/");
     const isVid = mime.startsWith("video/");
-
     if (!isImg && !isVid) continue;
 
     const id = uid();
@@ -820,15 +781,12 @@ els.filePicker.addEventListener("change", async () => {
     const createdAt = Date.now();
 
     let thumb = null;
-    if (type === "image"){
-      thumb = await imgToThumbBlob(f);
-    } else {
-      thumb = await videoToThumbBlob(f);
-    }
+    if (type === "image") thumb = await imgToThumbBlob(f);
+    else thumb = await videoToThumbBlob(f);
 
     const meta = {
       id,
-      folderId: state.currentFolderId,   // adiciona na pasta atual; se estiver na raiz, fica solto
+      folderId: state.currentFolderId,
       name,
       nameLower: name.toLowerCase(),
       type,
@@ -841,11 +799,9 @@ els.filePicker.addEventListener("change", async () => {
   }
 
   await refreshFromDB();
-  toast("Adicionado.");
+  showToast("Adicionado.");
   render();
 });
-
-/* ---------------- Add folder ---------------- */
 
 els.btnAddFolder.addEventListener("click", () => openFolderModal(null));
 

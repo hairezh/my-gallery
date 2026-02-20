@@ -3,64 +3,146 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Galeria (Offline no Navegador)</title>
+  <title>Minha Galeria</title>
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
-  <header class="top">
-    <div class="brand">
-      <h1>Minha Galeria</h1>
-      <p>Arquivos salvos no seu navegador (IndexedDB)</p>
-    </div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sideTop">
+        <div class="logo">
+          <div class="logoMark">◆</div>
+          <div>
+            <div class="logoTitle">Minha Galeria</div>
+            <div class="logoSub">IndexedDB • local</div>
+          </div>
+        </div>
 
-    <div class="controls">
-      <input id="search" placeholder="Buscar por nome..." />
-      <select id="folderSelect"></select>
-      <select id="typeSelect">
-        <option value="all">Tudo</option>
-        <option value="image">Imagens</option>
-        <option value="video">Vídeos</option>
-      </select>
-      <button id="refresh">Atualizar</button>
-    </div>
-  </header>
-
-  <section class="uploader">
-    <input id="folderInput" placeholder="Pasta (ex: Anime, Wallpapers...)" />
-    <input id="fileInput" type="file" multiple accept="image/*,video/*" />
-    <button id="addBtn">Adicionar</button>
-    <span id="status"></span>
-  </section>
-
-  <section class="backup">
-    <button id="exportBtn">Exportar backup (.json)</button>
-    <input id="importInput" type="file" accept="application/json" />
-    <button id="clearBtn" class="danger">Apagar tudo (deste navegador)</button>
-  </section>
-
-  <main id="grid" class="grid"></main>
-
-  <template id="cardTpl">
-    <article class="card">
-      <div class="preview"></div>
-      <div class="meta">
-        <div class="name"></div>
-        <div class="sub"></div>
+        <button id="newFolderBtn" class="btn btnGhost">+ Nova pasta</button>
       </div>
-      <div class="actions">
-        <button class="open">Abrir</button>
-        <button class="del danger">Excluir</button>
-      </div>
-    </article>
-  </template>
 
-  <dialog id="viewer">
+      <div class="sideSection">
+        <div class="sideHeader">
+          <span>Pastas</span>
+          <span id="folderCount" class="pill">0</span>
+        </div>
+        <div id="folderList" class="folderList"></div>
+      </div>
+
+      <div class="sideSection">
+        <div class="sideHeader"><span>Backup</span></div>
+        <div class="backupRow">
+          <button id="exportBtn" class="btn">Exportar</button>
+          <label class="btn btnGhost">
+            Importar
+            <input id="importInput" type="file" accept="application/json" hidden />
+          </label>
+        </div>
+        <button id="clearBtn" class="btn btnDanger">Apagar tudo (neste navegador)</button>
+      </div>
+
+      <div class="sideFooter">
+        <div id="storageHint" class="muted"></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="searchWrap">
+          <input id="search" class="input" placeholder="Buscar por nome… (ex: naruto, s01, op…)" />
+          <div class="kbd">Ctrl</div><div class="kbd">K</div>
+        </div>
+
+        <div class="filters">
+          <select id="typeSelect" class="input">
+            <option value="all">Tudo</option>
+            <option value="image">Imagens</option>
+            <option value="video">Vídeos</option>
+          </select>
+
+          <select id="sortSelect" class="input">
+            <option value="new">Mais recentes</option>
+            <option value="old">Mais antigos</option>
+            <option value="name">Nome (A–Z)</option>
+            <option value="size">Tamanho (maior)</option>
+          </select>
+
+          <button id="refresh" class="btn btnGhost">Atualizar</button>
+        </div>
+      </header>
+
+      <section class="uploader">
+        <div class="uploadRow">
+          <input id="folderInput" class="input" placeholder="Pasta alvo (ou use a sidebar)" />
+          <input id="tagsInput" class="input" placeholder="Tags (opcional, separadas por vírgula)" />
+          <input id="fileInput" type="file" multiple accept="image/*,video/*" hidden />
+          <button id="pickBtn" class="btn">Escolher arquivos</button>
+          <button id="addBtn" class="btn btnPrimary">Adicionar</button>
+        </div>
+
+        <div id="dropzone" class="dropzone" tabindex="0">
+          <div class="dzTitle">Arraste e solte arquivos aqui</div>
+          <div class="dzSub">Imagens e vídeos • thumbnails automáticas • favoritos • renomear • mover</div>
+          <div id="status" class="status"></div>
+        </div>
+      </section>
+
+      <section class="metaBar">
+        <div class="metaLeft">
+          <span id="activeFolderLabel" class="pill pillSoft">Todos</span>
+          <span id="resultsLabel" class="muted"></span>
+        </div>
+        <div class="metaRight">
+          <button id="toggleDense" class="btn btnGhost">Modo compacto</button>
+        </div>
+      </section>
+
+      <section id="grid" class="grid"></section>
+    </main>
+  </div>
+
+  <dialog id="viewer" class="viewer">
     <div class="viewerTop">
-      <div id="viewerTitle"></div>
-      <button id="closeViewer">Fechar</button>
+      <div class="viewerTitleWrap">
+        <div id="viewerTitle" class="viewerTitle"></div>
+        <div id="viewerMeta" class="viewerMeta"></div>
+      </div>
+      <div class="viewerActions">
+        <button id="favBtn" class="btn btnGhost">⭐</button>
+        <button id="renameBtn" class="btn btnGhost">Renomear</button>
+        <button id="moveBtn" class="btn btnGhost">Mover</button>
+        <button id="downloadBtn" class="btn">Baixar</button>
+        <button id="deleteBtn" class="btn btnDanger">Excluir</button>
+        <button id="closeViewer" class="btn btnGhost">Fechar</button>
+      </div>
     </div>
     <div id="viewerBody" class="viewerBody"></div>
   </dialog>
+
+  <div id="toastHost" class="toastHost" aria-live="polite"></div>
+
+  <template id="cardTpl">
+    <article class="card" tabindex="0">
+      <div class="thumb">
+        <img class="thumbImg" alt="" />
+        <div class="thumbOverlay">
+          <span class="badge typeBadge"></span>
+          <span class="badge durBadge"></span>
+        </div>
+      </div>
+      <div class="cardBody">
+        <div class="titleRow">
+          <div class="title"></div>
+          <button class="star" title="Favoritar">☆</button>
+        </div>
+        <div class="subRow">
+          <span class="folder"></span>
+          <span class="size"></span>
+        </div>
+        <div class="tags"></div>
+      </div>
+    </article>
+  </template>
 
   <script src="./app.js"></script>
 </body>

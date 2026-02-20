@@ -69,7 +69,15 @@
           </div>
 
           <div class="panelBody">
-            <div class="crumbs" id="crumbs"></div>
+            <!-- ABAS DAS PASTAS -->
+            <div class="tabsRow">
+              <div id="tabs" class="tabs" aria-label="Pastas (abas)"></div>
+
+              <div class="tabsTools">
+                <button class="btn" id="btnSelectFolders" type="button">Selecionar</button>
+                <button class="btn danger" id="btnDeleteSelected" type="button" hidden>Excluir</button>
+              </div>
+            </div>
 
             <main id="grid" class="grid" aria-label="Galeria"></main>
 
@@ -92,9 +100,18 @@
 
   <input id="filePicker" type="file" accept="image/*,video/*" multiple hidden />
 
-  <!-- Hover preview (centro + fundo escuro) -->
+  <!-- Hover preview (clicável + download) -->
   <div id="hoverPreview" class="hoverPreview" aria-hidden="true">
-    <div class="hoverCard" id="hoverCard"></div>
+    <div class="hoverPanel" role="dialog" aria-label="Preview">
+      <div class="hoverTop">
+        <div class="hoverTitle" id="hoverTitle">—</div>
+        <div class="hoverActions">
+          <button class="btn primary" id="hoverDownload" type="button">Download</button>
+          <button class="btn" id="hoverClose" type="button">Fechar</button>
+        </div>
+      </div>
+      <div class="hoverCard" id="hoverCard"></div>
+    </div>
   </div>
 
   <!-- Modal: Pasta (criar/editar) -->

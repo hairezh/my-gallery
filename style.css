@@ -122,7 +122,7 @@ main{padding:12px 16px 28px}
   object-fit:cover;
   display:block;
 }
-.thumb .videoBadge{
+.thumb .badge{
   font-size:12px;
   padding:6px 10px;
   border-radius:999px;
@@ -150,14 +150,30 @@ main{padding:12px 16px 28px}
   color:var(--muted);
 }
 
-.viewer{
+/* Modal */
+.hidden{display:none}
+.modal{
+  position:fixed;
+  inset:0;
+  display:grid;
+  place-items:center;
+  z-index:9999;
+}
+.modalBackdrop{
+  position:absolute;
+  inset:0;
+  background:rgba(0,0,0,.55);
+}
+.modalPanel{
+  position:relative;
   width:min(980px, 96vw);
+  max-height: 88vh;
+  overflow:auto;
   border:1px solid var(--border);
   border-radius:var(--r);
   background:var(--panel);
-  color:var(--text);
 }
-.viewerTop{
+.modalTop{
   padding:12px;
   display:flex;
   justify-content:space-between;

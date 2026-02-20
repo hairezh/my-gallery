@@ -5,7 +5,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Galeria</title>
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="./styles.css" />
 </head>
 
 <body>
@@ -21,15 +21,17 @@
       </div>
 
       <div class="tools">
-        <!-- exatamente os botões -->
+        <!-- botões principais -->
         <button class="btn primary" id="btnAddMedia" type="button">Adicionar (foto)</button>
         <button class="btn" id="btnAddFolder" type="button">Adicionar pasta</button>
         <button class="btn" id="btnSearch" type="button">Pesquisar</button>
+
+        <!-- novo botão -->
+        <button class="btn" id="btnBg" type="button">Fundo</button>
       </div>
     </div>
 
     <div class="layout">
-      <!-- dock só “decorativo”/informativo, no mesmo estilo do tema -->
       <aside class="dock" aria-label="Dock">
         <div class="dockGroup">
           <div class="icoBtn active" aria-hidden="true">
@@ -98,7 +100,7 @@
     <div class="hoverCard" id="hoverCard"></div>
   </div>
 
-  <!-- Modal: Pasta (criar/editar) -->
+  <!-- Modal: Pasta -->
   <dialog class="modal" id="folderModal">
     <form method="dialog" class="modalCard" id="folderForm">
       <div class="modalTitle" id="folderModalTitle">Nova pasta</div>
@@ -153,10 +155,49 @@
     </div>
   </dialog>
 
+  <!-- Modal: Fundo -->
+  <dialog class="modal" id="bgModal">
+    <form method="dialog" class="modalCard" id="bgForm">
+      <div class="modalTitle">Fundo</div>
+
+      <label class="field">
+        <span>Background por URL</span>
+        <input id="bgUrl" type="url" placeholder="https://... (gif, jpg, png)" />
+      </label>
+
+      <label class="field">
+        <span>Ou escolher arquivo</span>
+        <input id="bgFile" type="file" accept="image/*" />
+        <span class="help">
+          Dica: GIF funciona. Arquivo fica salvo no navegador.
+        </span>
+      </label>
+
+      <label class="field">
+        <span>Blur: <b id="bgBlurVal">0.6px</b></span>
+        <input id="bgBlur" type="range" min="0" max="12" step="0.1" />
+      </label>
+
+      <label class="field">
+        <span>Claridade: <b id="bgLightVal">50%</b></span>
+        <input id="bgLight" type="range" min="0" max="100" step="1" />
+        <span class="help">
+          0% = mais escuro · 100% = mais claro
+        </span>
+      </label>
+
+      <div class="modalRow">
+        <button class="btn" type="button" id="bgCancel">Cancelar</button>
+        <button class="btn" type="button" id="bgReset">Padrão</button>
+        <button class="btn primary" type="submit" id="bgSave">Salvar</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast" role="status" aria-live="polite">
     <span id="toastText">OK</span>
   </div>
 
-  <script src="app.js"></script>
+  <script src="./app.js"></script>
 </body>
 </html>

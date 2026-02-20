@@ -21,12 +21,9 @@
       </div>
 
       <div class="tools">
-        <!-- botões principais -->
         <button class="btn primary" id="btnAddMedia" type="button">Adicionar (foto)</button>
         <button class="btn" id="btnAddFolder" type="button">Adicionar pasta</button>
         <button class="btn" id="btnSearch" type="button">Pesquisar</button>
-
-        <!-- novo botão -->
         <button class="btn" id="btnBg" type="button">Fundo</button>
       </div>
     </div>
@@ -100,7 +97,7 @@
     <div class="hoverCard" id="hoverCard"></div>
   </div>
 
-  <!-- Modal: Pasta -->
+  <!-- Modal: Pasta (criar/editar) -->
   <dialog class="modal" id="folderModal">
     <form method="dialog" class="modalCard" id="folderForm">
       <div class="modalTitle" id="folderModalTitle">Nova pasta</div>
@@ -168,9 +165,7 @@
       <label class="field">
         <span>Ou escolher arquivo</span>
         <input id="bgFile" type="file" accept="image/*" />
-        <span class="help">
-          Dica: GIF funciona. Arquivo fica salvo no navegador.
-        </span>
+        <span class="fieldHint">Dica: GIF funciona. Arquivo fica salvo no navegador.</span>
       </label>
 
       <label class="field">
@@ -181,9 +176,7 @@
       <label class="field">
         <span>Claridade: <b id="bgLightVal">50%</b></span>
         <input id="bgLight" type="range" min="0" max="100" step="1" />
-        <span class="help">
-          0% = mais escuro · 100% = mais claro
-        </span>
+        <span class="fieldHint">0% = bem escuro · 100% = bem claro</span>
       </label>
 
       <div class="modalRow">

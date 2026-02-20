@@ -1,17 +1,19 @@
 /* Galeria local (IndexedDB) — imagens e vídeos
-   - Pastas (nome + data)
-   - Upload (blobs) + thumbs
-   - Busca por pastas + arquivos
-   - Hover preview (centro + fundo escuro)
-   - Fundo configurável: URL/arquivo + blur + claridade
+   - Pastas como ABAS (tabs)
+   - Botão Selecionar -> excluir pasta(s) específica(s)
+   - Hover preview menor + mostra tudo (contain) + botão download
+   - Fundo configurável (URL/arquivo + blur + claridade)
 */
 
 const $ = (sel) => document.querySelector(sel);
 
 const els = {
   grid: $("#grid"),
-  crumbs: $("#crumbs"),
   empty: $("#empty"),
+
+  tabs: $("#tabs"),
+  btnSelectFolders: $("#btnSelectFolders"),
+  btnDeleteSelected: $("#btnDeleteSelected"),
 
   btnAddMedia: $("#btnAddMedia"),
   btnAddFolder: $("#btnAddFolder"),
@@ -46,6 +48,9 @@ const els = {
 
   hoverPreview: $("#hoverPreview"),
   hoverCard: $("#hoverCard"),
+  hoverTitle: $("#hoverTitle"),
+  hoverDownload: $("#hoverDownload"),
+  hoverClose: $("#hoverClose"),
 
   bgModal: $("#bgModal"),
   bgForm: $("#bgForm"),
@@ -73,7 +78,18 @@ const state = {
   editingFolderId: null,
   viewingMediaId: null,
 
-  hover: { id: null, url: null, tIn: null, tOut: null },
+  folderSelectMode: false,
+  selectedFolderIds: new Set(),
+
+  hover: {
+    mediaId: null,
+    blobUrl: null,
+    tIn: null,
+    tOut: null,
+    overPreview: false,
+    overTile: false,
+    filename: "download",
+  },
 };
 
 function uid(){
@@ -258,7 +274,6 @@ async function dbGetSetting(key){
     })
   );
 }
-
 async function dbPutSetting(key, value){
   return tx(["settings"], "readwrite", (s) => s.put({ key, value }));
 }
@@ -336,92 +351,208 @@ async function videoToThumbBlob(fileBlob){
   }
 }
 
-/* ---------------- Hover preview ---------------- */
+/* ---------------- Pastas como ABAS + Selecionar/Excluir ---------------- */
 
-function canHover(){
-  return window.matchMedia && window.matchMedia("(hover: hover)").matches;
+function setFolderSelectMode(on){
+  state.folderSelectMode = on;
+  if (!on) state.selectedFolderIds.clear();
+  updateDeleteSelectedButton();
+  renderTabs();
+  render(); // pra atualizar badge e grid conforme necessário
 }
 
-function clearHoverURL(){
-  if (state.hover.url){
-    URL.revokeObjectURL(state.hover.url);
-    state.hover.url = null;
+function toggleFolderSelected(folderId){
+  if (state.selectedFolderIds.has(folderId)) state.selectedFolderIds.delete(folderId);
+  else state.selectedFolderIds.add(folderId);
+  updateDeleteSelectedButton();
+  renderTabs();
+}
+
+function updateDeleteSelectedButton(){
+  els.btnDeleteSelected.hidden = state.selectedFolderIds.size === 0;
+  els.btnSelectFolders.textContent = state.folderSelectMode ? "Selecionando…" : "Selecionar";
+}
+
+function renderTabs(){
+  const folders = [...state.folders].sort((a,b) => a.nameLower.localeCompare(b.nameLower));
+
+  els.tabs.innerHTML = "";
+
+  // Tab raiz
+  const root = document.createElement("button");
+  root.type = "button";
+  root.className = "tab" + (!state.currentFolderId ? " active" : "");
+  root.innerHTML = `<span class="tcheck" aria-hidden="true"></span><span class="tname">Raiz</span>`;
+  root.onclick = () => {
+    if (state.folderSelectMode) return; // raiz não seleciona
+    state.currentFolderId = null;
+    render();
+    renderTabs();
+  };
+  els.tabs.appendChild(root);
+
+  for (const f of folders){
+    const tab = document.createElement("button");
+    tab.type = "button";
+
+    const isActive = state.currentFolderId === f.id;
+    const selectable = state.folderSelectMode;
+    const selected = state.selectedFolderIds.has(f.id);
+
+    tab.className =
+      "tab" +
+      (isActive ? " active" : "") +
+      (selectable ? " selectable" : "") +
+      (selected ? " selected" : "");
+
+    tab.innerHTML = `
+      <span class="tcheck" aria-hidden="true">${selected ? "✓" : ""}</span>
+      <span class="tname">📁 ${escapeHtml(f.name)}</span>
+    `;
+
+    tab.onclick = () => {
+      if (state.folderSelectMode){
+        toggleFolderSelected(f.id);
+        return;
+      }
+      state.currentFolderId = f.id;
+      render();
+      renderTabs();
+    };
+
+    // Dica: duplo clique pra editar pasta
+    tab.ondblclick = () => openFolderModal(f.id);
+
+    els.tabs.appendChild(tab);
   }
 }
 
-function hideHoverPreview(){
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+  }[c]));
+}
+
+/* ---------------- Hover preview (clicável + download) ---------------- */
+
+function clearHoverUrl(){
+  if (state.hover.blobUrl){
+    URL.revokeObjectURL(state.hover.blobUrl);
+    state.hover.blobUrl = null;
+  }
+}
+
+function scheduleHidePreview(){
   clearTimeout(state.hover.tIn);
   clearTimeout(state.hover.tOut);
   state.hover.tOut = setTimeout(() => {
-    state.hover.id = null;
-    els.hoverCard.innerHTML = "";
+    // só fecha se mouse não estiver sobre o tile nem sobre o preview
+    if (state.hover.overTile || state.hover.overPreview) return;
     els.hoverPreview.classList.remove("show");
-    clearHoverURL();
-  }, 120);
+    els.hoverCard.innerHTML = "";
+    els.hoverTitle.textContent = "—";
+    state.hover.mediaId = null;
+    clearHoverUrl();
+  }, 140);
 }
 
-async function showHoverPreview(mediaId){
-  if (!canHover()) return;
-
+async function openHoverPreview(mediaId){
   clearTimeout(state.hover.tOut);
   clearTimeout(state.hover.tIn);
 
   state.hover.tIn = setTimeout(async () => {
-    state.hover.id = mediaId;
-
     const meta = state.media.find(m => m.id === mediaId);
     if (!meta) return;
 
     const rec = await dbGetBlobs(mediaId);
     if (!rec?.blob) return;
 
-    clearHoverURL();
-    state.hover.url = URL.createObjectURL(rec.blob);
+    clearHoverUrl();
+    state.hover.mediaId = mediaId;
+    state.hover.filename = meta.name || "download";
+    state.hover.blobUrl = URL.createObjectURL(rec.blob);
 
+    els.hoverTitle.textContent = meta.name || "(sem nome)";
     els.hoverCard.innerHTML = "";
 
     if (meta.type === "video"){
       const v = document.createElement("video");
-      v.src = state.hover.url;
-      v.muted = true;
-      v.autoplay = true;
-      v.loop = true;
+      v.src = state.hover.blobUrl;
+      v.controls = true;
       v.playsInline = true;
       els.hoverCard.appendChild(v);
     } else {
       const img = document.createElement("img");
-      img.src = state.hover.url;
+      img.src = state.hover.blobUrl;
       img.alt = meta.name || "preview";
       els.hoverCard.appendChild(img);
     }
 
     els.hoverPreview.classList.add("show");
-  }, 80);
+  }, 90);
 }
+
+function downloadCurrentPreview(){
+  if (!state.hover.blobUrl) return;
+  const a = document.createElement("a");
+  a.href = state.hover.blobUrl;
+  a.download = state.hover.filename || "download";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/* preview events */
+els.hoverDownload.addEventListener("click", (e) => {
+  e.preventDefault();
+  downloadCurrentPreview();
+});
+
+els.hoverClose.addEventListener("click", () => {
+  state.hover.overPreview = false;
+  state.hover.overTile = false;
+  scheduleHidePreview();
+});
+
+els.hoverPreview.addEventListener("pointerenter", () => {
+  state.hover.overPreview = true;
+  clearTimeout(state.hover.tOut);
+});
+els.hoverPreview.addEventListener("pointerleave", () => {
+  state.hover.overPreview = false;
+  scheduleHidePreview();
+});
+
+// clicar no fundo (fora do painel) fecha
+els.hoverPreview.addEventListener("click", (e) => {
+  if (e.target === els.hoverPreview){
+    state.hover.overPreview = false;
+    state.hover.overTile = false;
+    scheduleHidePreview();
+  }
+});
 
 /* ---------------- Fundo (URL/arquivo + blur + claridade) ---------------- */
 
 const BG_DEFAULT = {
-  mode: "url", // "url" | "blob"
+  mode: "url",
   url: "https://i.pinimg.com/originals/f5/93/a4/f593a4f4932080fb7b43c6ae96d1a73d.gif",
-  blob: null,  // Blob (se mode="blob")
+  blob: null,
   blur: 0.6,
-  light: 50,   // 0..100
+  light: 50,
 };
 
 const bgState = {
   cfg: { ...BG_DEFAULT },
-  objUrl: null,      // objectURL do blob ativo
-  draftPrev: null,   // snapshot ao abrir modal
-  chosenBlob: null,  // arquivo selecionado no input
+  objUrl: null,
+  draftPrev: null,
+  chosenBlob: null,
 };
 
 function applyBgVars(cfg){
   const blur = Number(cfg.blur ?? 0);
   const light = Math.max(0, Math.min(100, Number(cfg.light ?? 50))) / 100;
-
-  // claridade => dim (mais claro = menos overlay escuro)
-  const dim = 1.25 - (0.80 * light); // 0%:1.25 (escuro) / 100%:0.45 (claro)
+  const dim = 1.25 - (0.80 * light);
 
   document.documentElement.style.setProperty("--bg-blur", `${blur.toFixed(1)}px`);
   document.documentElement.style.setProperty("--bg-dim", String(dim));
@@ -433,7 +564,6 @@ function applyBgVars(cfg){
     return;
   }
 
-  // url mode
   if (bgState.objUrl){ URL.revokeObjectURL(bgState.objUrl); bgState.objUrl = null; }
   const url = (cfg.url || BG_DEFAULT.url).trim();
   document.documentElement.style.setProperty("--bg-image", `url("${url}")`);
@@ -442,19 +572,15 @@ function applyBgVars(cfg){
 async function loadBgSettings(){
   const saved = await dbGetSetting("ui.background");
   const cfg = saved ? { ...BG_DEFAULT, ...saved } : { ...BG_DEFAULT };
-
-  // garante consistência: se blob não existir, cai pra url
   if (cfg.mode === "blob" && !(cfg.blob instanceof Blob)){
     cfg.mode = "url";
     cfg.blob = null;
   }
-
   bgState.cfg = cfg;
   applyBgVars(cfg);
 }
 
 async function saveBgSettings(cfg){
-  // salva o blob se for modo blob; o IndexedDB aceita Blob por clone estruturado
   await dbPutSetting("ui.background", cfg);
 }
 
@@ -480,11 +606,10 @@ function cfgFromBgControls(baseCfg, chosenBlob){
     return { ...baseCfg, mode: "url", url, blob: null, blur, light };
   }
 
-  // sem url e sem blob novo: mantém o atual
   return { ...baseCfg, blur, light };
 }
 
-/* ---------------- Render ---------------- */
+/* ---------------- Render / UI ---------------- */
 
 function setBadges(){
   const folder = state.currentFolderId
@@ -494,7 +619,7 @@ function setBadges(){
   els.badgePath.textContent = folder ? `Pasta: ${folder.name}` : "Raiz";
 
   const q = state.searchQuery.trim();
-  els.badgeMode.textContent = q ? "modo: busca" : "modo: normal";
+  els.badgeMode.textContent = q ? "modo: busca" : (state.folderSelectMode ? "modo: selecionar" : "modo: normal");
 
   els.badgeCount.textContent = `${computeVisibleCount()} itens`;
 }
@@ -516,44 +641,18 @@ function computeVisibleCount(){
   return state.media.filter(m => m.folderId === state.currentFolderId).length;
 }
 
-function setCrumbs(){
-  const wrap = document.createElement("div");
-
-  const root = document.createElement("a");
-  root.href = "#";
-  root.className = "badge";
-  root.textContent = "Raiz";
-  root.onclick = (e) => {
-    e.preventDefault();
-    state.currentFolderId = null;
-    render();
-  };
-  wrap.appendChild(root);
-
-  if (state.currentFolderId){
-    const f = state.folders.find(x => x.id === state.currentFolderId);
-    const cur = document.createElement("span");
-    cur.className = "badge subtle";
-    cur.textContent = `› ${f?.name || "Pasta"}`;
-    wrap.appendChild(cur);
-  }
-
-  els.crumbs.innerHTML = "";
-  els.crumbs.appendChild(wrap);
-}
-
 function isEmptyAll(){
   return state.folders.length === 0 && state.media.length === 0;
 }
 
 async function render(){
-  setCrumbs();
+  setBadges();
   els.grid.innerHTML = "";
   els.empty.hidden = !isEmptyAll();
 
   const q = state.searchQuery.trim().toLowerCase();
-  setBadges();
 
+  // Busca: mostra pastas como “cards” + arquivos
   if (q){
     const folderHits = state.folders
       .filter(f => f.nameLower.includes(q) || (f.createdISO || "").includes(q))
@@ -576,6 +675,7 @@ async function render(){
     return;
   }
 
+  // Raiz: mostra cards das pastas + mídias soltas
   if (!state.currentFolderId){
     const folders = [...state.folders].sort((a,b) => (b.createdISO||"").localeCompare(a.createdISO||""));
     for (const f of folders) els.grid.appendChild(folderCube(f));
@@ -587,6 +687,7 @@ async function render(){
     return;
   }
 
+  // Dentro da pasta
   const inside = state.media
     .filter(m => m.folderId === state.currentFolderId)
     .sort((a,b) => (b.createdAt||0) - (a.createdAt||0));
@@ -626,26 +727,16 @@ function folderCube(folder){
   cube.appendChild(meta);
 
   cube.onclick = () => {
+    if (state.folderSelectMode){
+      toggleFolderSelected(folder.id);
+      return;
+    }
     state.currentFolderId = folder.id;
     render();
+    renderTabs();
   };
 
   cube.ondblclick = () => openFolderModal(folder.id);
-
-  cube.oncontextmenu = async (e) => {
-    e.preventDefault();
-    const choice = prompt("Pasta:\n1 = editar\n2 = excluir\n(Enter cancela)");
-    if (choice === "1") openFolderModal(folder.id);
-    if (choice === "2"){
-      const ok = confirm("Excluir esta pasta e tudo dentro dela?");
-      if (!ok) return;
-      await dbDeleteFolder(folder.id);
-      await refreshFromDB();
-      if (state.currentFolderId === folder.id) state.currentFolderId = null;
-      showToast("Pasta excluída.");
-      render();
-    }
-  };
 
   return cube;
 }
@@ -690,8 +781,14 @@ async function mediaCube(meta){
   metaBar.appendChild(mini);
   cube.appendChild(metaBar);
 
-  cube.addEventListener("pointerenter", () => showHoverPreview(meta.id));
-  cube.addEventListener("pointerleave", hideHoverPreview);
+  cube.addEventListener("pointerenter", () => {
+    state.hover.overTile = true;
+    openHoverPreview(meta.id);
+  });
+  cube.addEventListener("pointerleave", () => {
+    state.hover.overTile = false;
+    scheduleHidePreview();
+  });
 
   cube.onclick = () => openViewer(meta.id);
 
@@ -746,6 +843,8 @@ els.folderForm.addEventListener("submit", async (e) => {
   els.folderModal.close();
   showToast(state.editingFolderId ? "Pasta atualizada." : "Pasta criada.");
   state.editingFolderId = null;
+
+  renderTabs();
   render();
 });
 
@@ -770,7 +869,7 @@ function fillMoveSelect(currentFolderId){
 }
 
 async function openViewer(mediaId){
-  hideHoverPreview();
+  scheduleHidePreview();
   state.viewingMediaId = mediaId;
 
   const meta = state.media.find(m => m.id === mediaId);
@@ -840,7 +939,7 @@ els.viewerApply.addEventListener("click", async () => {
   render();
 });
 
-/* ---------------- Search ---------------- */
+/* ---------------- Search / keys ---------------- */
 
 function setSearchOpen(open){
   state.searchOpen = open;
@@ -869,11 +968,17 @@ document.addEventListener("keydown", (e) => {
   const isTyping = tag === "input" || tag === "textarea" || document.activeElement?.isContentEditable;
 
   if (e.key === "Escape"){
-    hideHoverPreview();
     if (els.viewerModal.open) els.viewerModal.close();
     if (els.folderModal.open) els.folderModal.close();
     if (els.bgModal.open) els.bgModal.close();
     if (state.searchOpen) setSearchOpen(false);
+    if (state.folderSelectMode) setFolderSelectMode(false);
+
+    // fecha preview
+    state.hover.overPreview = false;
+    state.hover.overTile = false;
+    scheduleHidePreview();
+
     e.preventDefault();
   }
 
@@ -934,10 +1039,43 @@ els.filePicker.addEventListener("change", async () => {
 
 els.btnAddFolder.addEventListener("click", () => openFolderModal(null));
 
+/* ---------------- Botão Selecionar / Excluir pastas ---------------- */
+
+els.btnSelectFolders.addEventListener("click", () => {
+  setFolderSelectMode(!state.folderSelectMode);
+  if (state.folderSelectMode) showToast("Selecione as pastas nas abas.");
+});
+
+els.btnDeleteSelected.addEventListener("click", async () => {
+  if (!state.selectedFolderIds.size) return;
+  const names = [...state.selectedFolderIds]
+    .map(id => state.folders.find(f => f.id === id)?.name)
+    .filter(Boolean);
+
+  const ok = confirm(`Excluir ${state.selectedFolderIds.size} pasta(s)?\n\n${names.join("\n")}`);
+  if (!ok) return;
+
+  const ids = [...state.selectedFolderIds];
+  for (const id of ids) await dbDeleteFolder(id);
+
+  await refreshFromDB();
+
+  // se a pasta atual foi excluída, volta pra raiz
+  if (state.currentFolderId && !state.folders.some(f => f.id === state.currentFolderId)){
+    state.currentFolderId = null;
+  }
+
+  setFolderSelectMode(false);
+  showToast("Pasta(s) excluída(s).");
+
+  renderTabs();
+  render();
+});
+
 /* ---------------- Fundo UI ---------------- */
 
 els.btnBg.addEventListener("click", () => {
-  bgState.draftPrev = { ...bgState.cfg }; // snapshot superficial (blob é referência ok)
+  bgState.draftPrev = { ...bgState.cfg };
   bgState.chosenBlob = null;
   syncBgModalUIFromCfg(bgState.cfg);
   els.bgModal.showModal();
@@ -946,13 +1084,12 @@ els.btnBg.addEventListener("click", () => {
 els.bgFile.addEventListener("change", () => {
   const f = els.bgFile.files?.[0] || null;
   bgState.chosenBlob = f;
-
   const draft = cfgFromBgControls(bgState.cfg, bgState.chosenBlob);
   applyBgVars(draft);
 });
 
 els.bgUrl.addEventListener("input", () => {
-  if (bgState.chosenBlob) return; // arquivo tem prioridade
+  if (bgState.chosenBlob) return;
   const draft = cfgFromBgControls(bgState.cfg, null);
   applyBgVars(draft);
 });
@@ -970,7 +1107,6 @@ els.bgLight.addEventListener("input", () => {
 });
 
 els.bgCancel.addEventListener("click", () => {
-  // reverte snapshot
   if (bgState.draftPrev){
     bgState.cfg = { ...bgState.draftPrev };
     applyBgVars(bgState.cfg);
@@ -1008,5 +1144,6 @@ async function refreshFromDB(){
 (async function init(){
   await refreshFromDB();
   await loadBgSettings();
+  renderTabs();
   render();
 })();

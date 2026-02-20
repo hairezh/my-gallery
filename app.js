@@ -1,11 +1,94 @@
 (() => {
-  // ====== IndexedDB ======
+  // ===== IndexedDB =====
   const DB_NAME = "galeriaDB";
   const DB_VERSION = 1;
   const STORE = "items";
 
   let db = null;
 
+  const $ = (q) => document.querySelector(q);
+
+  // UI
+  const searchInput = $("#searchInput");
+  const folderFilter = $("#folderFilter");
+  const typeFilter = $("#typeFilter");
+  const sortBy = $("#sortBy");
+
+  const folderInput = $("#folderInput");
+  const fileInput = $("#fileInput");
+  const pickBtn = $("#pickBtn");
+  const addBtn = $("#addBtn");
+  const statusEl = $("#status");
+  const dropzone = $("#dropzone");
+
+  const exportBtn = $("#exportBtn");
+  const importInput = $("#importInput");
+  const clearBtn = $("#clearBtn");
+
+  const grid = $("#grid");
+  const tpl = $("#cardTpl");
+
+  const countLabel = $("#countLabel");
+  const quotaLabel = $("#quotaLabel");
+
+  // Modal
+  const modal = $("#modal");
+  const modalBackdrop = $("#modalBackdrop");
+  const viewerName = $("#viewerName");
+  const viewerInfo = $("#viewerInfo");
+  const viewerBody = $("#viewerBody");
+  const renameBtn = $("#renameBtn");
+  const moveBtn = $("#moveBtn");
+  const downloadBtn = $("#downloadBtn");
+  const deleteBtn = $("#deleteBtn");
+  const closeBtn = $("#closeBtn");
+
+  // State
+  let itemsCache = [];
+  let currentId = null;
+  const urlCache = new Map(); // id -> objectURL
+
+  // ===== Helpers =====
+  function setStatus(msg) { statusEl.textContent = msg || ""; }
+
+  function uid() { return `${Date.now()}_${Math.random().toString(16).slice(2)}`; }
+
+  function guessType(mime) {
+    if (!mime) return "other";
+    if (mime.startsWith("image/")) return "image";
+    if (mime.startsWith("video/")) return "video";
+    return "other";
+  }
+
+  function humanBytes(bytes) {
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0, b = bytes || 0;
+    while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
+    return `${b.toFixed(b >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+  }
+
+  function fmtDate(iso) {
+    try { return new Date(iso).toLocaleString(); } catch { return iso || ""; }
+  }
+
+  function openModal() { modal.classList.remove("hidden"); }
+  function closeModal() { modal.classList.add("hidden"); }
+
+  function objectURLFor(item) {
+    if (urlCache.has(item.id)) return urlCache.get(item.id);
+    const blob = item.data instanceof Blob ? item.data : new Blob([item.data], { type: item.mime });
+    const url = URL.createObjectURL(blob);
+    urlCache.set(item.id, url);
+    return url;
+  }
+
+  function revokeURL(id) {
+    const u = urlCache.get(id);
+    if (u) URL.revokeObjectURL(u);
+    urlCache.delete(id);
+  }
+
+  // ===== DB =====
   function openDB() {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -26,28 +109,6 @@
 
   function store(mode = "readonly") {
     return db.transaction(STORE, mode).objectStore(STORE);
-  }
-
-  function uid() {
-    return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  }
-
-  function guessType(mime) {
-    if (!mime) return "other";
-    if (mime.startsWith("image/")) return "image";
-    if (mime.startsWith("video/")) return "video";
-    return "other";
-  }
-
-  function humanBytes(bytes) {
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let i = 0, b = bytes || 0;
-    while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
-    return `${b.toFixed(b >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
-  }
-
-  function fmtDate(iso) {
-    try { return new Date(iso).toLocaleString(); } catch { return iso; }
   }
 
   function getAll() {
@@ -82,7 +143,7 @@
     });
   }
 
-  function clearAll() {
+  function clearDB() {
     return new Promise((resolve, reject) => {
       const req = store("readwrite").clear();
       req.onsuccess = () => resolve(true);
@@ -90,63 +151,7 @@
     });
   }
 
-  // ====== UI refs ======
-  const $ = (q) => document.querySelector(q);
-
-  const searchInput = $("#searchInput");
-  const folderFilter = $("#folderFilter");
-  const typeFilter = $("#typeFilter");
-  const sortBy = $("#sortBy");
-
-  const folderInput = $("#folderInput");
-  const fileInput = $("#fileInput");
-  const pickBtn = $("#pickBtn");
-  const addBtn = $("#addBtn");
-  const statusEl = $("#status");
-  const dropzone = $("#dropzone");
-
-  const exportBtn = $("#exportBtn");
-  const importInput = $("#importInput");
-  const clearBtn = $("#clearBtn");
-
-  const grid = $("#grid");
-  const tpl = $("#cardTpl");
-
-  const countLabel = $("#countLabel");
-  const quotaLabel = $("#quotaLabel");
-
-  const viewer = $("#viewer");
-  const viewerName = $("#viewerName");
-  const viewerInfo = $("#viewerInfo");
-  const viewerBody = $("#viewerBody");
-  const renameBtn = $("#renameBtn");
-  const moveBtn = $("#moveBtn");
-  const downloadBtn = $("#downloadBtn");
-  const deleteBtn = $("#deleteBtn");
-  const closeBtn = $("#closeBtn");
-
-  let itemsCache = [];
-  let currentId = null;
-  const urlCache = new Map(); // id -> objectURL
-
-  function setStatus(msg) {
-    statusEl.textContent = msg || "";
-  }
-
-  function objectURLFor(item) {
-    if (urlCache.has(item.id)) return urlCache.get(item.id);
-    const blob = item.data instanceof Blob ? item.data : new Blob([item.data], { type: item.mime });
-    const url = URL.createObjectURL(blob);
-    urlCache.set(item.id, url);
-    return url;
-  }
-
-  function revokeURL(id) {
-    const u = urlCache.get(id);
-    if (u) URL.revokeObjectURL(u);
-    urlCache.delete(id);
-  }
-
+  // ===== Rendering =====
   function refreshFolderOptions(items) {
     const counts = new Map();
     for (const it of items) {
@@ -166,7 +171,6 @@
         folderFilter.appendChild(opt);
       });
 
-    // tenta manter seleção
     const exists = [...folderFilter.options].some(o => o.value === current);
     folderFilter.value = exists ? current : "__ALL__";
   }
@@ -195,8 +199,7 @@
 
   function render() {
     const list = filteredAndSorted(itemsCache);
-
-    countLabel.textContent = `${list.length} item(ns) visível(is) • ${itemsCache.length} total`;
+    countLabel.textContent = `${list.length} visível(is) • ${itemsCache.length} total`;
 
     grid.innerHTML = "";
     if (list.length === 0) {
@@ -227,15 +230,15 @@
         img.src = objectURLFor(it);
         thumb.appendChild(img);
       } else if (it.type === "video") {
-        const badge = document.createElement("div");
-        badge.className = "videoBadge";
-        badge.textContent = "VÍDEO";
-        thumb.appendChild(badge);
+        const b = document.createElement("div");
+        b.className = "badge";
+        b.textContent = "VÍDEO";
+        thumb.appendChild(b);
       } else {
-        const badge = document.createElement("div");
-        badge.className = "videoBadge";
-        badge.textContent = "ARQUIVO";
-        thumb.appendChild(badge);
+        const b = document.createElement("div");
+        b.className = "badge";
+        b.textContent = "ARQUIVO";
+        thumb.appendChild(b);
       }
 
       card.addEventListener("click", () => openViewer(it.id));
@@ -248,7 +251,7 @@
   }
 
   async function reload() {
-    // limpa URLs antigas para evitar vazamento
+    // limpa URLs antigas pra não vazar memória
     for (const it of itemsCache) revokeURL(it.id);
 
     itemsCache = await getAll();
@@ -258,10 +261,7 @@
   }
 
   async function updateQuota() {
-    if (!navigator.storage?.estimate) {
-      quotaLabel.textContent = "";
-      return;
-    }
+    if (!navigator.storage?.estimate) { quotaLabel.textContent = ""; return; }
     try {
       const est = await navigator.storage.estimate();
       quotaLabel.textContent = `Uso: ${humanBytes(est.usage || 0)} / ${humanBytes(est.quota || 0)}`;
@@ -274,7 +274,6 @@
   async function openViewer(id) {
     const it = await get(id);
     if (!it) return;
-
     currentId = id;
 
     viewerName.textContent = it.name || "(sem nome)";
@@ -304,16 +303,13 @@
       viewerBody.appendChild(a);
     }
 
-    viewer.showModal();
+    openModal();
   }
 
-  closeBtn.addEventListener("click", () => viewer.close());
-
-  viewer.addEventListener("click", (e) => {
-    // clicar fora fecha
-    const rect = viewer.getBoundingClientRect();
-    const inside = rect.left <= e.clientX && e.clientX <= rect.right && rect.top <= e.clientY && e.clientY <= rect.bottom;
-    if (!inside) viewer.close();
+  closeBtn.addEventListener("click", closeModal);
+  modalBackdrop.addEventListener("click", closeModal);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) closeModal();
   });
 
   renameBtn.addEventListener("click", async () => {
@@ -369,8 +365,8 @@
 
     await del(it.id);
     revokeURL(it.id);
-    viewer.close();
     currentId = null;
+    closeModal();
     await reload();
   });
 
@@ -384,10 +380,7 @@
 
   async function addFiles(fileList) {
     const files = [...(fileList || [])];
-    if (files.length === 0) {
-      setStatus("Escolha arquivos primeiro.");
-      return;
-    }
+    if (files.length === 0) { setStatus("Escolha arquivos primeiro."); return; }
 
     const folder = (folderInput.value || "Sem pasta").trim() || "Sem pasta";
 
@@ -406,7 +399,7 @@
           type: guessType(f.type),
           size: f.size,
           createdAt: new Date().toISOString(),
-          data: f // Blob
+          data: f
         };
         await put(item);
         ok++;
@@ -424,7 +417,6 @@
     await reload();
   }
 
-  // Drag & drop
   dropzone.addEventListener("dragover", (e) => {
     e.preventDefault();
     dropzone.style.borderColor = "rgba(58,116,255,.55)";
@@ -438,7 +430,7 @@
     await addFiles(e.dataTransfer?.files);
   });
 
-  // ===== Filtros =====
+  // ===== Filters =====
   const rerender = () => {
     clearTimeout(window.__r);
     window.__r = setTimeout(render, 80);
@@ -514,10 +506,11 @@
   clearBtn.addEventListener("click", async () => {
     if (!confirm("Isso vai apagar tudo salvo neste navegador. Continuar?")) return;
 
-    await clearAll();
-    // limpar urls
+    await clearDB();
     for (const it of itemsCache) revokeURL(it.id);
     itemsCache = [];
+    currentId = null;
+    closeModal();
     await reload();
   });
 

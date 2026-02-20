@@ -1,5 +1,9 @@
 /* Galeria local (IndexedDB) — imagens e vídeos
-   Tema escuro + thumbs pequenos + hover preview central
+   - Pastas (nome + data)
+   - Upload (blobs) + thumbs
+   - Busca por pastas + arquivos
+   - Hover preview (centro + fundo escuro)
+   - Fundo configurável: URL/arquivo + blur + claridade
 */
 
 const $ = (sel) => document.querySelector(sel);
@@ -12,6 +16,7 @@ const els = {
   btnAddMedia: $("#btnAddMedia"),
   btnAddFolder: $("#btnAddFolder"),
   btnSearch: $("#btnSearch"),
+  btnBg: $("#btnBg"),
 
   filePicker: $("#filePicker"),
 
@@ -42,6 +47,17 @@ const els = {
   hoverPreview: $("#hoverPreview"),
   hoverCard: $("#hoverCard"),
 
+  bgModal: $("#bgModal"),
+  bgForm: $("#bgForm"),
+  bgUrl: $("#bgUrl"),
+  bgFile: $("#bgFile"),
+  bgBlur: $("#bgBlur"),
+  bgLight: $("#bgLight"),
+  bgBlurVal: $("#bgBlurVal"),
+  bgLightVal: $("#bgLightVal"),
+  bgCancel: $("#bgCancel"),
+  bgReset: $("#bgReset"),
+
   toast: $("#toast"),
   toastText: $("#toastText"),
 };
@@ -57,12 +73,7 @@ const state = {
   editingFolderId: null,
   viewingMediaId: null,
 
-  hover: {
-    id: null,
-    url: null,
-    timerIn: null,
-    timerOut: null,
-  }
+  hover: { id: null, url: null, tIn: null, tOut: null },
 };
 
 function uid(){
@@ -101,25 +112,37 @@ function showToast(msg){
 /* ---------------- IndexedDB ---------------- */
 
 const DB_NAME = "galeria-minimal";
-const DB_VER = 1;
+const DB_VER = 2;
 
 function idbOpen(){
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VER);
+
     req.onupgradeneeded = () => {
       const db = req.result;
 
-      const folders = db.createObjectStore("folders", { keyPath: "id" });
-      folders.createIndex("nameLower", "nameLower", { unique: false });
-      folders.createIndex("createdISO", "createdISO", { unique: false });
+      if (!db.objectStoreNames.contains("folders")){
+        const folders = db.createObjectStore("folders", { keyPath: "id" });
+        folders.createIndex("nameLower", "nameLower", { unique: false });
+        folders.createIndex("createdISO", "createdISO", { unique: false });
+      }
 
-      const media = db.createObjectStore("media", { keyPath: "id" });
-      media.createIndex("folderId", "folderId", { unique: false });
-      media.createIndex("nameLower", "nameLower", { unique: false });
-      media.createIndex("createdAt", "createdAt", { unique: false });
+      if (!db.objectStoreNames.contains("media")){
+        const media = db.createObjectStore("media", { keyPath: "id" });
+        media.createIndex("folderId", "folderId", { unique: false });
+        media.createIndex("nameLower", "nameLower", { unique: false });
+        media.createIndex("createdAt", "createdAt", { unique: false });
+      }
 
-      db.createObjectStore("blobs", { keyPath: "id" });
+      if (!db.objectStoreNames.contains("blobs")){
+        db.createObjectStore("blobs", { keyPath: "id" });
+      }
+
+      if (!db.objectStoreNames.contains("settings")){
+        db.createObjectStore("settings", { keyPath: "key" });
+      }
     };
+
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
@@ -140,20 +163,11 @@ async function tx(storeNames, mode, fn){
   });
 }
 
+/* folders */
 async function dbGetAllFolders(){
   return tx(["folders"], "readonly", (folders) =>
     new Promise((res, rej) => {
       const req = folders.getAll();
-      req.onsuccess = () => res(req.result || []);
-      req.onerror = () => rej(req.error);
-    })
-  );
-}
-
-async function dbGetAllMediaMeta(){
-  return tx(["media"], "readonly", (media) =>
-    new Promise((res, rej) => {
-      const req = media.getAll();
       req.onsuccess = () => res(req.result || []);
       req.onerror = () => rej(req.error);
     })
@@ -179,6 +193,17 @@ async function dbDeleteFolder(folderId){
     }
     folders.delete(folderId);
   });
+}
+
+/* media */
+async function dbGetAllMediaMeta(){
+  return tx(["media"], "readonly", (media) =>
+    new Promise((res, rej) => {
+      const req = media.getAll();
+      req.onsuccess = () => res(req.result || []);
+      req.onerror = () => rej(req.error);
+    })
+  );
 }
 
 async function dbPutMedia(meta, blob, thumb){
@@ -223,7 +248,22 @@ async function dbUpdateMediaMeta(mediaId, patch){
   );
 }
 
-/* ---------------- thumbs ---------------- */
+/* settings */
+async function dbGetSetting(key){
+  return tx(["settings"], "readonly", (s) =>
+    new Promise((res, rej) => {
+      const req = s.get(key);
+      req.onsuccess = () => res(req.result?.value ?? null);
+      req.onerror = () => rej(req.error);
+    })
+  );
+}
+
+async function dbPutSetting(key, value){
+  return tx(["settings"], "readwrite", (s) => s.put({ key, value }));
+}
+
+/* ---------------- Thumbs ---------------- */
 
 async function imgToThumbBlob(fileBlob){
   const img = new Image();
@@ -296,7 +336,7 @@ async function videoToThumbBlob(fileBlob){
   }
 }
 
-/* ---------------- hover preview ---------------- */
+/* ---------------- Hover preview ---------------- */
 
 function canHover(){
   return window.matchMedia && window.matchMedia("(hover: hover)").matches;
@@ -310,24 +350,23 @@ function clearHoverURL(){
 }
 
 function hideHoverPreview(){
-  clearTimeout(state.hover.timerIn);
-  clearTimeout(state.hover.timerOut);
-  state.hover.timerOut = setTimeout(() => {
+  clearTimeout(state.hover.tIn);
+  clearTimeout(state.hover.tOut);
+  state.hover.tOut = setTimeout(() => {
     state.hover.id = null;
     els.hoverCard.innerHTML = "";
     els.hoverPreview.classList.remove("show");
     clearHoverURL();
-  }, 60);
+  }, 120);
 }
 
 async function showHoverPreview(mediaId){
   if (!canHover()) return;
 
-  clearTimeout(state.hover.timerOut);
-  clearTimeout(state.hover.timerIn);
+  clearTimeout(state.hover.tOut);
+  clearTimeout(state.hover.tIn);
 
-  state.hover.timerIn = setTimeout(async () => {
-    // se mudou de item no meio, ignora
+  state.hover.tIn = setTimeout(async () => {
     state.hover.id = mediaId;
 
     const meta = state.media.find(m => m.id === mediaId);
@@ -336,7 +375,6 @@ async function showHoverPreview(mediaId){
     const rec = await dbGetBlobs(mediaId);
     if (!rec?.blob) return;
 
-    // troca url
     clearHoverURL();
     state.hover.url = URL.createObjectURL(rec.blob);
 
@@ -358,10 +396,95 @@ async function showHoverPreview(mediaId){
     }
 
     els.hoverPreview.classList.add("show");
-  }, 120);
+  }, 80);
 }
 
-/* ---------------- render ---------------- */
+/* ---------------- Fundo (URL/arquivo + blur + claridade) ---------------- */
+
+const BG_DEFAULT = {
+  mode: "url", // "url" | "blob"
+  url: "https://i.pinimg.com/originals/f5/93/a4/f593a4f4932080fb7b43c6ae96d1a73d.gif",
+  blob: null,  // Blob (se mode="blob")
+  blur: 0.6,
+  light: 50,   // 0..100
+};
+
+const bgState = {
+  cfg: { ...BG_DEFAULT },
+  objUrl: null,      // objectURL do blob ativo
+  draftPrev: null,   // snapshot ao abrir modal
+  chosenBlob: null,  // arquivo selecionado no input
+};
+
+function applyBgVars(cfg){
+  const blur = Number(cfg.blur ?? 0);
+  const light = Math.max(0, Math.min(100, Number(cfg.light ?? 50))) / 100;
+
+  // claridade => dim (mais claro = menos overlay escuro)
+  const dim = 1.25 - (0.80 * light); // 0%:1.25 (escuro) / 100%:0.45 (claro)
+
+  document.documentElement.style.setProperty("--bg-blur", `${blur.toFixed(1)}px`);
+  document.documentElement.style.setProperty("--bg-dim", String(dim));
+
+  if (cfg.mode === "blob" && cfg.blob instanceof Blob){
+    if (bgState.objUrl) URL.revokeObjectURL(bgState.objUrl);
+    bgState.objUrl = URL.createObjectURL(cfg.blob);
+    document.documentElement.style.setProperty("--bg-image", `url("${bgState.objUrl}")`);
+    return;
+  }
+
+  // url mode
+  if (bgState.objUrl){ URL.revokeObjectURL(bgState.objUrl); bgState.objUrl = null; }
+  const url = (cfg.url || BG_DEFAULT.url).trim();
+  document.documentElement.style.setProperty("--bg-image", `url("${url}")`);
+}
+
+async function loadBgSettings(){
+  const saved = await dbGetSetting("ui.background");
+  const cfg = saved ? { ...BG_DEFAULT, ...saved } : { ...BG_DEFAULT };
+
+  // garante consistência: se blob não existir, cai pra url
+  if (cfg.mode === "blob" && !(cfg.blob instanceof Blob)){
+    cfg.mode = "url";
+    cfg.blob = null;
+  }
+
+  bgState.cfg = cfg;
+  applyBgVars(cfg);
+}
+
+async function saveBgSettings(cfg){
+  // salva o blob se for modo blob; o IndexedDB aceita Blob por clone estruturado
+  await dbPutSetting("ui.background", cfg);
+}
+
+function syncBgModalUIFromCfg(cfg){
+  els.bgUrl.value = cfg.mode === "url" ? (cfg.url || "") : "";
+  els.bgFile.value = "";
+  els.bgBlur.value = String(cfg.blur ?? 0.6);
+  els.bgLight.value = String(cfg.light ?? 50);
+  els.bgBlurVal.textContent = `${Number(els.bgBlur.value).toFixed(1)}px`;
+  els.bgLightVal.textContent = `${els.bgLight.value}%`;
+}
+
+function cfgFromBgControls(baseCfg, chosenBlob){
+  const blur = Number(els.bgBlur.value);
+  const light = Number(els.bgLight.value);
+
+  if (chosenBlob instanceof Blob){
+    return { ...baseCfg, mode: "blob", blob: chosenBlob, blur, light };
+  }
+
+  const url = (els.bgUrl.value || "").trim();
+  if (url){
+    return { ...baseCfg, mode: "url", url, blob: null, blur, light };
+  }
+
+  // sem url e sem blob novo: mantém o atual
+  return { ...baseCfg, blur, light };
+}
+
+/* ---------------- Render ---------------- */
 
 function setBadges(){
   const folder = state.currentFolderId
@@ -373,8 +496,7 @@ function setBadges(){
   const q = state.searchQuery.trim();
   els.badgeMode.textContent = q ? "modo: busca" : "modo: normal";
 
-  const count = computeVisibleCount();
-  els.badgeCount.textContent = `${count} itens`;
+  els.badgeCount.textContent = `${computeVisibleCount()} itens`;
 }
 
 function computeVisibleCount(){
@@ -472,7 +594,7 @@ async function render(){
   for (const m of inside) els.grid.appendChild(await mediaCube(m));
 }
 
-/* ---------------- cubes ---------------- */
+/* ---------------- Cubes ---------------- */
 
 function folderCube(folder){
   const cube = document.createElement("section");
@@ -508,13 +630,15 @@ function folderCube(folder){
     render();
   };
 
+  cube.ondblclick = () => openFolderModal(folder.id);
+
   cube.oncontextmenu = async (e) => {
     e.preventDefault();
-    const okEdit = confirm("Editar esta pasta?\n\nOK = editar\nCancelar = não");
-    if (okEdit) openFolderModal(folder.id);
-    else {
-      const okDel = confirm("Excluir esta pasta e tudo dentro dela?");
-      if (!okDel) return;
+    const choice = prompt("Pasta:\n1 = editar\n2 = excluir\n(Enter cancela)");
+    if (choice === "1") openFolderModal(folder.id);
+    if (choice === "2"){
+      const ok = confirm("Excluir esta pasta e tudo dentro dela?");
+      if (!ok) return;
       await dbDeleteFolder(folder.id);
       await refreshFromDB();
       if (state.currentFolderId === folder.id) state.currentFolderId = null;
@@ -566,7 +690,6 @@ async function mediaCube(meta){
   metaBar.appendChild(mini);
   cube.appendChild(metaBar);
 
-  // hover preview
   cube.addEventListener("pointerenter", () => showHoverPreview(meta.id));
   cube.addEventListener("pointerleave", hideHoverPreview);
 
@@ -647,7 +770,9 @@ function fillMoveSelect(currentFolderId){
 }
 
 async function openViewer(mediaId){
+  hideHoverPreview();
   state.viewingMediaId = mediaId;
+
   const meta = state.media.find(m => m.id === mediaId);
   if (!meta) return;
 
@@ -715,7 +840,7 @@ els.viewerApply.addEventListener("click", async () => {
   render();
 });
 
-/* ---------------- Search / keys ---------------- */
+/* ---------------- Search ---------------- */
 
 function setSearchOpen(open){
   state.searchOpen = open;
@@ -740,15 +865,19 @@ els.searchInput.addEventListener("input", () => {
 });
 
 document.addEventListener("keydown", (e) => {
+  const tag = (document.activeElement?.tagName || "").toLowerCase();
+  const isTyping = tag === "input" || tag === "textarea" || document.activeElement?.isContentEditable;
+
   if (e.key === "Escape"){
     hideHoverPreview();
     if (els.viewerModal.open) els.viewerModal.close();
     if (els.folderModal.open) els.folderModal.close();
+    if (els.bgModal.open) els.bgModal.close();
     if (state.searchOpen) setSearchOpen(false);
     e.preventDefault();
   }
 
-  if (e.key === "Enter" && state.searchOpen){
+  if (!isTyping && e.key === "Enter" && state.searchOpen){
     const first = els.grid.querySelector(".cube");
     if (first){
       first.click();
@@ -805,6 +934,70 @@ els.filePicker.addEventListener("change", async () => {
 
 els.btnAddFolder.addEventListener("click", () => openFolderModal(null));
 
+/* ---------------- Fundo UI ---------------- */
+
+els.btnBg.addEventListener("click", () => {
+  bgState.draftPrev = { ...bgState.cfg }; // snapshot superficial (blob é referência ok)
+  bgState.chosenBlob = null;
+  syncBgModalUIFromCfg(bgState.cfg);
+  els.bgModal.showModal();
+});
+
+els.bgFile.addEventListener("change", () => {
+  const f = els.bgFile.files?.[0] || null;
+  bgState.chosenBlob = f;
+
+  const draft = cfgFromBgControls(bgState.cfg, bgState.chosenBlob);
+  applyBgVars(draft);
+});
+
+els.bgUrl.addEventListener("input", () => {
+  if (bgState.chosenBlob) return; // arquivo tem prioridade
+  const draft = cfgFromBgControls(bgState.cfg, null);
+  applyBgVars(draft);
+});
+
+els.bgBlur.addEventListener("input", () => {
+  els.bgBlurVal.textContent = `${Number(els.bgBlur.value).toFixed(1)}px`;
+  const draft = cfgFromBgControls(bgState.cfg, bgState.chosenBlob);
+  applyBgVars(draft);
+});
+
+els.bgLight.addEventListener("input", () => {
+  els.bgLightVal.textContent = `${els.bgLight.value}%`;
+  const draft = cfgFromBgControls(bgState.cfg, bgState.chosenBlob);
+  applyBgVars(draft);
+});
+
+els.bgCancel.addEventListener("click", () => {
+  // reverte snapshot
+  if (bgState.draftPrev){
+    bgState.cfg = { ...bgState.draftPrev };
+    applyBgVars(bgState.cfg);
+  }
+  bgState.chosenBlob = null;
+  els.bgModal.close();
+});
+
+els.bgReset.addEventListener("click", async () => {
+  bgState.cfg = { ...BG_DEFAULT };
+  bgState.chosenBlob = null;
+  syncBgModalUIFromCfg(bgState.cfg);
+  applyBgVars(bgState.cfg);
+  await saveBgSettings(bgState.cfg);
+  showToast("Fundo padrão.");
+});
+
+els.bgForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  bgState.cfg = cfgFromBgControls(bgState.cfg, bgState.chosenBlob);
+  applyBgVars(bgState.cfg);
+  await saveBgSettings(bgState.cfg);
+  bgState.chosenBlob = null;
+  els.bgModal.close();
+  showToast("Fundo salvo.");
+});
+
 /* ---------------- Boot ---------------- */
 
 async function refreshFromDB(){
@@ -814,5 +1007,6 @@ async function refreshFromDB(){
 
 (async function init(){
   await refreshFromDB();
+  await loadBgSettings();
   render();
 })();
